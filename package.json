@@ -1,0 +1,23 @@
+{
+	"name": "@blackprint/code-generation",
+	"description": "Blackprint code generation library",
+	"version": "0.1.0",
+	"author": "Blackprint",
+	"license": "MIT",
+	"repository": {
+	  "type": "git",
+	  "url": "https://github.com/Blackprint/code-generation.git"
+	},
+	"bugs": {
+	  "url": "https://github.com/Blackprint/code-generation/issues"
+	},
+	"homepage": "https://blackprint.github.io/",
+	"main": "dist/code-generation.min.js",
+	"module": "dist/code-generation.mjs",
+	"keywords": [
+	  "visual-programming",
+	  "flow-based-programming",
+	  "blackprint"
+	]
+  }
+  
