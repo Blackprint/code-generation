@@ -183,7 +183,6 @@ Blackprint.Code.registerHandler({
 	def __len__(self): return dict.__len__(self._data)
 	def __delitem__(self, key): dict.__delitem__(self._data, key)
 	def __contains__(self, x): return dict.__contains__(self._data, x)
-	def call(self, key, val): raise Exception("ToDo")
 	def get(self, key): return self._data[key][0]()
 	def keys(self): return self._data.keys()
 	def items(self): return self._data.items()
