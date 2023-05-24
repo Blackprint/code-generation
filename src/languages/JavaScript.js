@@ -3,6 +3,7 @@ Blackprint.Code.registerHandler({
 	languageId: 'js',
 
 	routeFunction: `function bp_route_{{+bp current_route_name }}(){\n{{+bp wrap_code_here }}\n}`,
+	routeFillEmpty: `\t/* Empty route */`,
 
 	// namespace: BP/Event/Listen
 	entryPointNode(routes){
@@ -13,10 +14,14 @@ Blackprint.Code.registerHandler({
 			name: name,
 			begin: `exports.${name} = async function(Input){`,
 			end: `}`,
+			input: {
+				Reset: '/* 1 */',
+				Off: '/* 1 */',
+			}
 		};
 	},
 
-	generatePortsStorage({ iface, ifaceIndex, ifaceList, variabels }){
+	generatePortsStorage({ iface, ifaceIndex, ifaceList, variabels, routeIndex, outRoutes, template }){
 		let inputs = [], outputs = [];
 		let { IInput, IOutput } = iface.ref;
 
@@ -31,7 +36,14 @@ Blackprint.Code.registerHandler({
 					let typed = typeof def;
 					let feature = IInput[key].feature;
 
-					if(feature === Blackprint.Port.Trigger) def = null;
+					if(feature === Blackprint.Port.Trigger){
+						def = template.input?.[key];
+						if(def == null)
+							throw new Error(`${iface.namespace}: Trigger callback haven't been registered for input port "${key}"`);
+						
+						inputs.push(`${portName}(Input, Output){ ${def} }`);
+						continue;
+					}
 					else if(feature === Blackprint.Port.ArrayOf) def = [];
 					else if(typed !== 'string' && typed !== 'number' && typed !== 'boolean')
 						throw new Error(`Can't use default type of non-primitive type for "${key}" input port in "${iface.namespace}"`);
@@ -51,16 +63,24 @@ Blackprint.Code.registerHandler({
 				let cables = port.cables;
 				for (let i=0; i < cables.length; i++) {
 					let inp = cables[i].input;
-					if(inp == null) continue;
+					if(inp == null || inp.isRoute) continue;
 
 					let targetIndex = ifaceList.indexOf(inp.iface);
 					let propAccessName = /(^[^a-zA-Z]|\W)/m.test(inp.name) ? JSON.stringify(inp.name) : inp.name;
 
 					propAccessName = propAccessName.slice(0, 1) === '"' ? '['+propAccessName+']' : '.'+propAccessName;
-					targets.push(`bp_input_${targetIndex + propAccessName}`);
+					targets.push({index: targetIndex, prop: propAccessName});
 				}
 
 				if(port.type !== Function){
+					if(port.isRoute){
+						outputs.push(`get ${portName}(){ return bp_route_${routeIndex}_${outRoutes[key]}; }`);
+						continue;
+					}
+
+					// flatten
+					targets = targets.map(v => `bp_input_${v.index}${v.prop}`);
+
 					// portIndex++;
 					if(targets.length !== 0)
 						outputs.push(`set ${portName}(val){ ${targets.join('\n')} = val; }`);
@@ -70,9 +90,8 @@ Blackprint.Code.registerHandler({
 					outputs.push(`get ${portName}(){ return ${targets[0]}; }`);
 				}
 				else {
-					outputs.push(`${portName}(){
-						${targets.join('();\t\n')}();
-					}`.replace(/^					/gm, ''));
+					let temp = targets.map(v => `bp_input_${temp.index + temp.prop}(bp_input_${temp.index}, bp_output_${temp.index})`);
+					outputs.push(`${portName}(){ ${temp.join('; ')} }`.replace(/^					/gm, ''));
 				}
 			}
 		}
@@ -146,7 +165,7 @@ Blackprint.Code.registerHandler({
 		inits += `\n\n\t// Data storages`;
 		inits += `\n\t${[...sharedData.variabels.values()].join('\n\t')}`;
 
-		let body = ('// Node .update() functions\n' + ((Object.values(sharedData.nodeCode).join('\n').trim() || '// ...') + '\n\n\n// ==== Begin of exported execution tree as functions ==== \n' + entryPoints.trim()).trim()).replace(/\n/g, '\n\t');
+		let body = ('// Node .update() functions\n' + ((Object.values(sharedData.nodeCode).join('\n').trim() || '// - This export has no shared function') + '\n\n\n// ==== Begin of exported execution tree as functions ==== \n' + entryPoints.trim()).trim()).replace(/\n/g, '\n\t');
 
 		let exported = sharedData.exported;
 		let exports = '';

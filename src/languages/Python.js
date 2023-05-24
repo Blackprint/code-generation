@@ -3,6 +3,7 @@ Blackprint.Code.registerHandler({
 	languageId: 'python',
 
 	routeFunction: `def bp_route_{{+bp current_route_name }}():\n{{+bp wrap_code_here }}\n`,
+	routeFillEmpty: `pass # Empty route`,
 
 	// namespace: BP/Event/Listen
 	entryPointNode(routes){
@@ -13,13 +14,18 @@ Blackprint.Code.registerHandler({
 			name: name,
 			begin: `def ${name}(Input):`,
 			end: ``,
+			input: {
+				Reset: 'pass # 1',
+				Off: 'pass # 1',
+			}
 		};
 	},
 
-	generatePortsStorage({ iface, ifaceIndex, ifaceList, variabels }){
+	generatePortsStorage({ iface, ifaceIndex, ifaceList, variabels, routeIndex, outRoutes, template }){
 		let inputs = [], outputs = [];
 		let { IInput, IOutput } = iface.ref;
 
+		let inputFunc = [];
 		if(IInput != null){
 			for (let key in IInput) {
 				let def = IInput[key].default;
@@ -31,60 +37,80 @@ Blackprint.Code.registerHandler({
 					let typed = typeof def;
 					let feature = IInput[key].feature;
 
-					if(feature === Blackprint.Port.Trigger) def = null;
+					if(feature === Blackprint.Port.Trigger){
+						def = template.input?.[key];
+						if(def == null)
+							throw new Error(`${iface.namespace}: Trigger callback haven't been registered for input port "${key}"`);
+						
+						inputFunc.push(`def inp_f_${portName}(Input, Output):\n\t${def}`);
+
+						inputs.push(`"${portName}": lambda: inp_f_${portName}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex})`);
+						continue;
+					}
 					else if(feature === Blackprint.Port.ArrayOf) def = [];
 					else if(typed !== 'string' && typed !== 'number' && typed !== 'boolean')
 						throw new Error(`Can't use default type of non-primitive type for "${key}" input port in "${iface.namespace}"`);
+
+					if(typed === 'boolean'){
+						inputs.push(`"${portName}": ${def ? 'True' : 'False'}`);
+						continue;
+					}
 
 					inputs.push(`"${portName}": ${def != null ? JSON.stringify(def) : 'None'}`);
 				}
 			}
 		}
 
+		let outputFunc = [];
 		if(IOutput != null){
 			// let portIndex = 0;
 			for (let key in IOutput) {
 				let portName = /(^[^a-zA-Z]|\W)/m.test(key) ? JSON.stringify(key) : key;
 				let port = IOutput[key];
 
-				let getter = [];
-				let setter = [];
+				let targets = [];
 				let cables = port.cables;
 				for (let i=0; i < cables.length; i++) {
 					let inp = cables[i].input;
-					if(inp == null) continue;
+					if(inp == null || inp.isRoute) continue;
 
 					let targetIndex = ifaceList.indexOf(inp.iface);
 					let propAccessName = JSON.stringify(inp.name);
 
-					if(port.type === Function){
-						getter.push(`bp_input_${targetIndex}.call(${propAccessName})`);
-						continue;
-					}
-
-					setter.push(`set_(bp_input_${targetIndex}, ${propAccessName}, v)`);
-
-					if(getter.length === 0)
-						getter.push(`bp_input_${targetIndex}.get(${propAccessName})`);
+					targets.push({index: targetIndex, prop: propAccessName});
 				}
 
 				if(port.type !== Function){
+					if(port.isRoute){
+						outputs.push(`"${portName}": [lambda: bp_route_${routeIndex}_${outRoutes[key]}]`);
+						continue;
+					}
+
+					let temp = targets;
+
+					// flatten
+					let getter = `bp_input_${temp[0].index}.get(${temp[0].prop})`;
+					let setter = targets.map(v => `set_(bp_input_${v.index}, ${v.prop}, v)`);
+
 					// Take cached value from other port
 					// If possible we should avoid caching data in the output port
-					outputs.push(`"${portName}": [lambda: ${getter[0]}, lambda v: (${setter.join(',')})]`);
+					outputs.push(`"${portName}": [lambda: ${getter}, lambda v: (${setter.join(',')})]`);
 				}
 				else {
-					let targets = `bp_input_${targetIndex}.call(${propAccessName})`;
-					outputs.push(`${portName}(){
-						# ToDo
-						${targets.join('()\t\n')}()
-					}`.replace(/^					/gm, ''));
+					let temp = targets.map(v => `bp_input_${v.index}[${v.prop}]()`);
+					outputFunc.push(`def out_f_${portName}():\n\t${temp.join('\n\t')}`);
+					outputs.push(`"${portName}": [lambda: out_f_${portName}]`.replace(/^					/gm, ''));
 				}
 			}
 		}
 
+		inputFunc = inputFunc.join('\n').trim();
+		if(inputFunc != '') inputFunc = inputFunc + '\n';
+		outputFunc = outputFunc.join('\n').trim();
+		if(outputFunc != '') outputFunc = outputFunc + '\n';
+
 		if(!variabels.has(ifaceIndex))
-			variabels.set(ifaceIndex, `bp_input_${ifaceIndex} = {${inputs.join(', ')}}\nbp_output_${ifaceIndex} = DataStorage({${outputs.join(', ')}})`);
+			variabels.set(ifaceIndex, `${inputFunc}${outputFunc}bp_input_${ifaceIndex} = {${inputs.join(', ')}}\nbp_output_${ifaceIndex} = DataStorage({${outputs.join(', ')}})`);
 	},
 
 	// This will be called everytime code was generated for a node
@@ -166,7 +192,7 @@ Blackprint.Code.registerHandler({
 def set_(obj, key, val): obj[key] = val`;
 		inits += `\n\n${[...sharedData.variabels.values()].join('\n')}`;
 
-		let body = ('# Node .update() functions\n' + ((Object.values(sharedData.nodeCode).join('\n').trim() || '# ...') + '\n\n\n# ==== Begin of exported execution tree as functions ==== \n' + entryPoints.trim()).trim());
+		let body = ('# Node .update() functions\n' + ((Object.values(sharedData.nodeCode).join('\n').trim() || '# - This export has no shared function') + '\n\n\n# ==== Begin of exported execution tree as functions ==== \n' + entryPoints.trim()).trim());
 
 		let exported = sharedData.exported;
 		let exports = '';

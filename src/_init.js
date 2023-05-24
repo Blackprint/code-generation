@@ -21,7 +21,7 @@ Blackprint.Code.prototype._generateFor = function(fnName, language, routes, ifac
 		throw new Error(`The registered code for "${this.iface.namespace}" doesn't have handler for "${language}" languange`);
 
 	let data = this[language](routes);
-	let ret = {};
+	let ret = Object.assign({}, data);
 
 	if(data.code) data.code = tidyLines(data.code);
 
@@ -102,20 +102,15 @@ function fromInstance(instance, language, sharedData){
 	for (let i=0; i < entrypoint.length; i++)
 		codes.push(fromNode(entrypoint[i], language, sharedData));
 
-	// Assign function index and merge the codes into a string
+	// Merge the codes into a string
 	let sharedCode = sharedData.nodeCode;
-	for (let key in sharedCode) {
-		let list = sharedCode[key];
-		for (let i=0; i < list.length; i++)
-			list[i] = list[i].replace('_bp_INDEX___', i);
-
+	for (let key in sharedCode)
 		sharedCode[key] = sharedCode[key].join('\n\n');
-	}
 
 	return codes.join('\n\n');
 }
 
-function fromNode(iface, language, sharedData, stopUntil){
+function fromNode(iface, language, sharedData, stopUntil, routeIndex){
 	let routes = {
 		traceRoute: [],
 		routeIn: null,
@@ -135,8 +130,11 @@ function fromNode(iface, language, sharedData, stopUntil){
 
 	sharedData.currentRoute++;
 	let selfRun = '';
+	let outRoutesFunc = '';
 	let wrapper = handler.routeFunction || '';
-	wrapper = wrapper.replace(/{{\+bp current_route_name }}/g, sharedData.currentRoute);
+	wrapper = wrapper.replace(/{{\+bp current_route_name }}/g, sharedData.currentRoute+(
+		routeIndex != null ? '_'+routeIndex : ''
+	));
 
 	let codes = [];
 	let variabels = sharedData.variabels;
@@ -156,21 +154,33 @@ function fromNode(iface, language, sharedData, stopUntil){
 
 		routes.routeOut = iface.node.routes.out?.input.iface;
 
-		let fnName = iface.namespace.replace(/\W/g, '_') + '_bp_INDEX___';
+		let fnName = iface.namespace.replace(/\W/g, '_');
 		let shared = sharedData.nodeCode[namespace] ??= [];
 
-		// _bp_INDEX___ will be replaced after all code was generated
 		let temp = code._generateFor(fnName, language, routes, ifaceIndex, sharedData, iface);
 		if(temp.code != null){
 			let i = shared.indexOf(temp.code);
 
 			if(temp.code.includes('{{+bp wrap_code_here }}')) wrapper = temp.code;
-			else {
-				if(i === -1){
-					i = shared.length;
-					shared.push(temp.code);
+			else if(i === -1 && temp.type !== Blackprint.CodeType.NotWrapped){
+				i = shared.length;
+				shared.push(temp.code);
+			}
+		}
+
+		// Check if output port has route type
+		let outs = iface.output;
+		let out_i = 0;
+		let outRoutes = {};
+		for (let key in outs) {
+			let temp = outs[key];
+
+			if(temp.isRoute){
+				let iface_ = temp.cables[0]?.input?.iface;
+				if(iface_){
+					outRoutes[key] = out_i;
+					outRoutesFunc += fromNode(iface_, language, sharedData, stopUntil, out_i++);
 				}
-				fnName = fnName.replace('_bp_INDEX___', i);
 			}
 		}
 
@@ -180,12 +190,14 @@ function fromNode(iface, language, sharedData, stopUntil){
 		handler.generatePortsStorage({
 			functionName: fnName, iface, ifaceIndex,
 			ifaceList, variabels, selfRun, routeIndex: sharedData.currentRoute, result,
+			outRoutes, template: temp,
 			codeClass: codesHandler[namespace]
 		});
 
 		handler.generateExecutionTree({
 			ifaceIndex, iface, routeIndex: sharedData.currentRoute,
 			functionName: fnName, codes, selfRun, result,
+			outRoutes,
 			codeClass: codesHandler[namespace], sharedData,
 		});
 
@@ -198,7 +210,7 @@ function fromNode(iface, language, sharedData, stopUntil){
 		if(stopUntil == iface) break;
 	}
 
-	return selfRun + '\n' + wrapper.replace('{{+bp wrap_code_here }}', '\t'+codes.join('\n\t'));
+	return selfRun + '\n' + outRoutesFunc + '\n' + wrapper.replace('{{+bp wrap_code_here }}', '\t'+(codes.join('\n\t') || handler.routeFillEmpty));
 }
 
 function tidyLines(str){
