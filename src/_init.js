@@ -12,11 +12,21 @@ Blackprint.Code.registerHandler = function(handler){
 	}
 	else handlers[handler.languageId] = handler;
 
-	EntryPointNode.prototype[handler.languageId] = handler.entryPointNode;
+	BPEnvSet.prototype[handler.languageId] = handler.internalNodes.environmentSet;
+	BPEnvGet.prototype[handler.languageId] = handler.internalNodes.environmentGet;
+	BPVarGet.prototype[handler.languageId] = handler.internalNodes.variableGet;
+	BPVarSet.prototype[handler.languageId] = handler.internalNodes.variableSet;
+	BPFn.prototype[handler.languageId] = handler.internalNodes.function;
+	BPFnOutput.prototype[handler.languageId] = handler.internalNodes.functionOutput;
+	BPFnInput.prototype[handler.languageId] = handler.internalNodes.functionInput;
+	BPFnVarOutput.prototype[handler.languageId] = handler.internalNodes.functionVarOutput;
+	BPFnVarInput.prototype[handler.languageId] = handler.internalNodes.functionVarInput;
+	BPEventListen.prototype[handler.languageId] = handler.internalNodes.eventListen;
+	BPEventEmit.prototype[handler.languageId] = handler.internalNodes.eventEmit;
 }
 
 // Declare function by assigning from the prototype to enjoy hot reload
-Blackprint.Code.prototype._generateFor = function(fnName, language, routes, ifaceIndex, sharedData, iface){
+Blackprint.Code.prototype._generateInit = function(language, routes){
 	if(this[language] == null)
 		throw new Error(`The registered code for "${this.iface.namespace}" doesn't have handler for "${language}" languange`);
 
@@ -24,10 +34,13 @@ Blackprint.Code.prototype._generateFor = function(fnName, language, routes, ifac
 	let ret = Object.assign({}, data);
 
 	if(data.code) data.code = tidyLines(data.code);
+	return ret;
+}
 
+Blackprint.Code.prototype._generateFor = function(fnName, language, routes, ifaceIndex, sharedData, iface, ret){
 	handlers[language].onNodeCodeGenerated(ret, {
 		codeClass: this.constructor,
-		data, functionName: fnName, routes, ifaceIndex, iface,
+		data: ret, functionName: fnName, routes, ifaceIndex, iface,
 		sharedData,
 	});
 
@@ -53,20 +66,33 @@ Blackprint.registerCode = function(namespace, clazz){
 // The event node mustn't have input route to be automatically marked as entrypoint
 // Some nodes may get skipped if it's not routed from the event node's route
 let codesCache;
-Blackprint.Code.generateFrom = function(node, language, exportName){
+Blackprint.Code.generateFrom = function(node, language, exportName, _sharedData){
 	if(language == null) throw new Error("Target language is required to be specified on parameter 2");
-	if(!exportName) throw new Error("Export name is required to be specified on parameter 3");
+	if(exportName == null) throw new Error("Export name is required to be specified on parameter 3");
 	codesCache = new Map();
 
 	if(handlers[language] == null)
 		throw new Error(`Code generation for '${language}' language is not implemented yet`);
 
-	let sharedData = {nodeCode: {}, nodes: [], variabels: new Map(), currentRoute: 0, exported: {}};
-	let generated;
+	let sharedData = {
+		nodeCode: _sharedData?.nodeCode || {},
+		nodes: [],
+		variabels: new Map(),
+		template: new Map(),
+		currentRoute: -1,
+		exported: {},
+		exportName,
+		mainShared: _sharedData?.mainShared || _sharedData,
+	};
 
-	if(node instanceof Blackprint.Engine)
+	let generated;
+	if(node instanceof Blackprint.Engine){
+		sharedData.instance = node;
 		generated = fromInstance(node, language, sharedData);
-	else if(node instanceof Blackprint.Interface){
+	}
+	else if(node instanceof Blackprint.Interface || node.namespace != null){
+		sharedData.instance = node.node.instance;
+
 		// Scan for input node that was event node type
 		let stopUntil = null;
 		// ToDo: scan for branching input and separate to different route for simplify the generated code
@@ -82,25 +108,32 @@ Blackprint.Code.generateFrom = function(node, language, exportName){
 function fromInstance(instance, language, sharedData){
 	let CodeRoute = Blackprint.CodeRoute;
 	let entrypoint = instance.ifaceList.filter(iface => {
-		let handler = codesHandler[iface.namespace];
+		let namespace = iface.namespace;
+		if(namespace.startsWith('BPI/F/')) namespace = 'BPI/F';
+
+		let handler = codesHandler[namespace];
 		let { routeIn } = handler.routeRules?.(iface) || handler;
 
 		if(routeIn === CodeRoute.Optional || routeIn === CodeRoute.None)
 			return true;
 
 		if(routeIn === CodeRoute.MustHave){
-			if(iface.node.routes.in.length === 0) throw new Error(`Node '${iface.namespace}' must have input route`);
+			if(iface.node.routes.in.length === 0) throw new Error(`Node '${namespace}' must have input route`);
 
 			// Node that have input route can't be the entrypoint
 			return false;
 		}
 
-		throw new Error("Unrecognized CodeRoute configuration for: " + iface.namespace);
+		throw new Error("Unrecognized CodeRoute configuration for: " + namespace);
 	});
 
 	let codes = [];
-	for (let i=0; i < entrypoint.length; i++)
-		codes.push(fromNode(entrypoint[i], language, sharedData));
+	for (let i=0; i < entrypoint.length; i++){
+		let code = fromNode(entrypoint[i], language, sharedData);
+
+		// Append only if not empty
+		if(code.trim()) codes.push(code);
+	}
 
 	// Merge the codes into a string
 	let sharedCode = sharedData.nodeCode;
@@ -118,50 +151,82 @@ function fromNode(iface, language, sharedData, stopUntil, routeIndex){
 	};
 
 	let ifaceList = iface.node.instance.ifaceList;
-
-	// let scanner = iface;
-	// while(scanner != null){
-	// 	sharedData.nodes.push(scanner);
-	// 	scanner = scanner.node.routes.out?.input.iface;
-	// 	if(stopUntil == scanner) break;
-	// }
-
 	let handler = handlers[language];
 
-	sharedData.currentRoute++;
 	let selfRun = '';
 	let outRoutesFunc = '';
 	let wrapper = handler.routeFunction || '';
+
+	sharedData.currentRoute++;
 	wrapper = wrapper.replace(/{{\+bp current_route_name }}/g, sharedData.currentRoute+(
-		routeIndex != null ? '_'+routeIndex : ''
+		routeIndex != null ? '_'+routeIndex : '_0'
 	));
+
+	// Generate code template cache
+	for (let i=0; i < ifaceList.length; i++) {
+		let iface_ = ifaceList[i];
+		let namespace = iface_.namespace;
+		let _namespace = namespace;
+		if(namespace.startsWith('BPI/F/')) _namespace = 'BPI/F';
+
+		let code = codesCache.get(iface_);
+		if(code == null){
+			let clazz = codesHandler[_namespace];
+			if(clazz == null)
+				throw new Error(`Code generation haven't been registered for: ${_namespace}`);
+
+			code = new clazz(iface_);
+			code.sharedData = sharedData;
+			code.exportName = sharedData.exportName;
+			codesCache.set(iface_, code);
+		}
+
+		let temp = code._generateInit(language, routes);
+		sharedData.template.set(iface_, temp);
+	}
+
+	for (let i=0; i < ifaceList.length; i++) {
+		let iface_ = ifaceList[i];
+		let temp = sharedData.template.get(iface_);
+		temp.onTemplateCached?.({ sharedData });
+
+		let code = codesCache.get(iface_);
+		let ifaceIndex = ifaceList.indexOf(iface_);
+		let fnName = iface_.namespace;
+		code._generateFor(fnName, language, routes, ifaceIndex, sharedData, iface_, temp);
+	}
+
+	// Generate route list
+	let routeList = [];
+	let iface_ = iface;
+	while(iface_ != null){
+		routeList.push(iface_);
+		iface_ = iface_.node.routes.out?.input.iface;
+		if(stopUntil == iface_) break;
+	}
 
 	let codes = [];
 	let variabels = sharedData.variabels;
-	while(iface != null){
-		let namespace = iface.namespace;
-		let code = codesCache.get(iface);
-		let ifaceIndex = ifaceList.indexOf(iface);
+	for (let i=0; i < routeList.length; i++) {
+		let iface_ = routeList[i];
+		let namespace = iface_.namespace;
+		let _namespace = namespace;
+		if(namespace.startsWith('BPI/F/')) _namespace = 'BPI/F';
+		let fnName = iface_.namespace;
 
-		if(code == null){
-			let clazz = codesHandler[namespace];
-			if(clazz == null)
-				throw new Error(`Code generation haven't been registered for: ${namespace}`);
-
-			code = new clazz(iface);
-			codesCache.set(iface, code);
-		}
-
-		routes.routeOut = iface.node.routes.out?.input.iface;
-
-		let fnName = iface.namespace.replace(/\W/g, '_');
+		let ifaceIndex = ifaceList.indexOf(iface_);
+		routes.routeOut = iface_.node.routes.out?.input.iface;
+		
+		let temp = sharedData.template.get(iface_);
 		let shared = sharedData.nodeCode[namespace] ??= [];
-
-		let temp = code._generateFor(fnName, language, routes, ifaceIndex, sharedData, iface);
 		if(temp.code != null){
 			let i = shared.indexOf(temp.code);
 
-			if(temp.code.includes('{{+bp wrap_code_here }}')) wrapper = temp.code;
+			if(temp.code.includes('{{+bp wrap_code_here }}')){
+				if(!temp.selfRun)
+					wrapper = wrapper.replace('{{+bp wrap_code_here }}', temp.code);
+				else wrapper = temp.code;
+			}
 			else if(i === -1 && temp.type !== Blackprint.CodeType.NotWrapped){
 				i = shared.length;
 				shared.push(temp.code);
@@ -169,7 +234,7 @@ function fromNode(iface, language, sharedData, stopUntil, routeIndex){
 		}
 
 		// Check if output port has route type
-		let outs = iface.output;
+		let outs = iface_.output;
 		let out_i = 0;
 		let outRoutes = {};
 		for (let key in outs) {
@@ -188,29 +253,32 @@ function fromNode(iface, language, sharedData, stopUntil, routeIndex){
 		// 'bp_input' is raw Object, 'bp_output' also raw Object that may have property of callable function
 		let result = {codes, selfRun: ''};
 		handler.generatePortsStorage({
-			functionName: fnName, iface, ifaceIndex,
+			functionName: fnName, iface: iface_, ifaceIndex, sharedData,
 			ifaceList, variabels, selfRun, routeIndex: sharedData.currentRoute, result,
-			outRoutes, template: temp,
-			codeClass: codesHandler[namespace]
+			outRoutes,
+			codeClass: codesHandler[_namespace]
 		});
 
 		handler.generateExecutionTree({
-			ifaceIndex, iface, routeIndex: sharedData.currentRoute,
+			ifaceIndex, iface: iface_, routeIndex: sharedData.currentRoute, sharedData,
 			functionName: fnName, codes, selfRun, result,
 			outRoutes,
-			codeClass: codesHandler[namespace], sharedData,
+			codeClass: codesHandler[_namespace], sharedData,
 		});
 
 		selfRun += result.selfRun;
 
-		routes.routeIn = iface;
-		routes.traceRoute.push(iface);
-
-		iface = routes.routeOut;
-		if(stopUntil == iface) break;
+		routes.routeIn = iface_;
+		routes.traceRoute.push(iface_);
+		if(stopUntil == iface_) break;
 	}
 
-	return selfRun + '\n' + outRoutesFunc + '\n' + wrapper.replace('{{+bp wrap_code_here }}', '\t'+(codes.join('\n\t') || handler.routeFillEmpty));
+	if(selfRun) selfRun += '\n';
+	if(outRoutesFunc) outRoutesFunc += '\n';
+
+	// if(codes.join('\n\t').trim().length === 0) debugger;
+
+	return selfRun + outRoutesFunc + wrapper.replace('{{+bp wrap_code_here }}', '\t'+(codes.join('\n\t') || handler.routeFillEmpty));
 }
 
 function tidyLines(str){
@@ -218,4 +286,15 @@ function tidyLines(str){
 	let pad = str.split('\n').pop().match(/^[\t ]+/m);
 	if(pad == null || pad.index !== 0) return str;
 	return str.replace(RegExp('^'+pad[0], 'gm'), '');
+}
+
+Blackprint.Code.utils = {};
+Blackprint.Code.utils.getFlatNamespace = getFlatNamespace;
+function getFlatNamespace(obj, list={}, current=""){
+	for (let key in obj) {
+		if(obj[key].constructor === Object)
+			getFlatNamespace(obj[key], list, current+key+"/");
+		else list[current+key] = obj[key];
+	}
+	return list;
 }
