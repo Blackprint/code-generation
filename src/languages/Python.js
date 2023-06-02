@@ -2,37 +2,253 @@ Blackprint.Code.registerHandler({
 	languageName: 'Python',
 	languageId: 'python',
 
-	routeFunction: `def bp_route_{{+bp current_route_name }}():\n{{+bp wrap_code_here }}\n`,
+	routeFunction: `def bp_route_{{+bp current_route_name }}():\n\t{{+bp wrap_code_here }}\n`,
 	routeFillEmpty: `pass # Empty route`,
 
-	// namespace: BP/Event/Listen
-	entryPointNode(routes){
-		let name = this.iface.data.namespace.replace(/\W/g, '_');
+	internalNodes: {
+		// namespace: BP/Env/Get
+		environmentGet(routes){
+			let name = this.iface.data.name;
+			let exportName = this.sharedData.mainShared?.exportName || this.sharedData.exportName;
 
-		return {
-			type: Blackprint.CodeType.Wrapper,
-			name: name,
-			begin: `def ${name}(Input):`,
-			end: ``,
-			input: {
-				Reset: 'pass # 1',
-				Off: 'pass # 1',
+			return {
+				type: Blackprint.CodeType.NotWrapped,
+				name: name,
+				code: ``,
+				outputAlias:  {
+					Val: `${exportName}.Environment[${JSON.stringify(name)}]`,
+				},
+			};
+		},
+
+		// namespace: BP/Env/Set
+		environmentSet(routes){
+			let name = this.iface.data.name;
+			let exportName = this.sharedData.mainShared?.exportName || this.sharedData.exportName;
+
+			return {
+				type: Blackprint.CodeType.NotWrapped,
+				name: name,
+				code: `${exportName}.Environment[${JSON.stringify(name)}] = Input.Val`,
+			};
+		},
+
+		// namespace: BP/Var/Get
+		variableGet(routes){
+			let data = this.iface.data;
+			let name = data.name;
+
+			return {
+				type: Blackprint.CodeType.NotWrapped,
+				name: name,
+				code: ``,
+				outputAlias: {
+					Val: `bp_var${data.scope}[${JSON.stringify(name)}]`,
+				},
+			};
+		},
+
+		// namespace: BP/Var/Set
+		variableSet(routes){
+			let data = this.iface.data;
+			let name = data.name;
+
+			return {
+				type: Blackprint.CodeType.NotWrapped,
+				name: name,
+				code: `bp_var${data.scope}[${JSON.stringify(name)}] = Input.Val`,
+			};
+		},
+
+		// namespace: BPI/F/*
+		function(routes){
+			let name = this.iface.namespace.replace('BPI/F/', '');
+			let ifaceIndex = this.iface.node.instance.ifaceList.indexOf(this.iface);
+
+			return {
+				type: Blackprint.CodeType.NotWrapped,
+				name: name,
+				code: `bp_func[${JSON.stringify(name)}](bp_input_${ifaceIndex}, bp_output_${ifaceIndex})`,
+			};
+		},
+
+		functionOutput(routes){
+			let {namespace, input, node} = this.iface;
+
+			function getInput(out){
+				let ifaceList = node.instance.ifaceList;
+				let targetIndex = ifaceList.indexOf(out.iface);
+				let propAccessName = JSON.stringify(out.name);
+				return `${targetIndex}[${propAccessName}]`;
 			}
-		};
+
+			return {
+				type: Blackprint.CodeType.NotWrapped,
+				name: namespace,
+				code: `/* Unexpected FnOutput code, this need to be fixed */`,
+				onTemplateCached({ sharedData }){
+					let list = [];
+					for (let key in input) {
+						let port = input[key];
+						let cables = port.cables;
+						if(cables.length === 0) continue;
+
+						let key_ = /(^[^a-zA-Z]|\W)/m.test(key) ? JSON.stringify(key) : key;
+						key_ = key_.slice(0, 1) === '"' ? '['+key_+']' : '.'+key_;
+
+						if(port.feature === Blackprint.Port.ArrayOf){
+							let temp = [];
+							for (let i=0; i < cables.length; i++) {
+								let out = cables[i].output;
+								let templ = sharedData.template.get(out.iface);
+
+								if(templ.outputAlias?.[out.name] != null)
+									temp.push(templ.outputAlias[out.name]);
+								else temp.push(`bp_output_${getInput(out)}`);
+							}
+
+							list.push(`BpFnOutput${key_} = [${temp.join(',')}]`);
+						}
+						else {
+							let out = cables[0].output;
+							let templ = sharedData.template.get(out.iface);
+
+							let append = '';
+							if(templ.outputAlias?.[out.name] != null)
+								append = templ.outputAlias[out.name];
+							else append = `bp_output_${getInput(out)}`;
+
+							list.push(`BpFnOutput${key_} = ${append}`);
+						}
+
+						this.code = `# <-- FnOutput\n\t${list.join('; ')};`;
+					}
+				}
+			};
+		},
+		functionInput(routes){
+			let name = this.iface.namespace;
+
+			return {
+				type: Blackprint.CodeType.NotWrapped,
+				selfRun: true,
+				name: name,
+				code: `# <-- FnInput`,
+			};
+		},
+		functionVarOutput(routes){
+			let name = this.iface.namespace;
+			let data = this.iface.data;
+
+			return {
+				type: Blackprint.CodeType.NotWrapped,
+				name: name,
+				code: `BpFnOutput["${data.name}"] = Input.Val;`,
+			};
+		},
+		functionVarInput(routes){
+			let name = this.iface.namespace;
+			let data = this.iface.data;
+			let instance = this.node.instance;
+			let proxyIface = instance.getNodes('BP/Fn/Input')[0].iface;
+			let proxyIndex = instance.ifaceList.indexOf(proxyIface);
+
+			return {
+				type: Blackprint.CodeType.NotWrapped,
+				name: name,
+				code: ``,
+				outputAlias: {
+					Val: `bp_output_${proxyIndex}["${data.name}"]`
+				},
+			};
+		},
+
+		// namespace: BP/Event/Listen
+		eventListen(routes){
+			let namespace = this.iface.data.namespace;
+			let name = namespace;
+			let flatName = namespace.replace(/\W/g, '_');
+			let exportName = this.sharedData.mainShared?.exportName || this.sharedData.exportName;
+
+			return {
+				type: Blackprint.CodeType.Wrapper,
+				name: name,
+				begin: `def ${flatName}(Input):`,
+				end: `${exportName}.on("${namespace}", ${flatName})\n`,
+				input: {
+					Reset: 'pass # 1',
+					Off: 'pass # 1',
+				}
+			};
+		},
+
+		// namespace: BP/Event/Emit
+		eventEmit(routes){
+			let namespace = this.iface.data.namespace;
+			let name = namespace;
+			let exportName = this.sharedData.mainShared?.exportName || this.sharedData.exportName;
+			let ports = Object.keys(this.iface.input).map(v=> {
+				let quoted = JSON.stringify(v);
+				return `${quoted}: Input[${quoted}]`;
+			}).join(', ');
+
+			return {
+				// type: Blackprint.CodeType.Wrapper,
+				name: name,
+				code: '',
+				input: {
+					Emit: `${exportName}.emit("${namespace}", { ${ports} })`, // ToDo
+				}
+			};
+		},
 	},
 
-	generatePortsStorage({ iface, ifaceIndex, ifaceList, variabels, routeIndex, outRoutes, template }){
+	generatePortsStorage({ iface, ifaceIndex, ifaceList, variabels, sharedData, routeIndex, outRoutes }){
 		let inputs = [], outputs = [];
+		let inputAlias = false, outputAlias = false;
 		let { IInput, IOutput } = iface.ref;
+		let template = sharedData.template.get(iface);
 
 		let inputFunc = [];
 		if(IInput != null){
 			for (let key in IInput) {
-				let def = IInput[key].default;
-				let portName = /(^[^a-zA-Z]|\W)/m.test(key) ? JSON.stringify(key) : key;
+				let {default: def, feature, cables} = IInput[key];
+				let portName = JSON.stringify(key);
+				let portNameFlat = key.replace(/\W/g, '_');
 
-				if(def == null)
-					inputs.push(`"${portName}": None`);
+				let targets = [];
+				for (let i=0; i < cables.length; i++) {
+					let out = cables[i].output;
+					if(out == null || out.isRoute) continue;
+
+					let outTemplate = sharedData.template.get(out.iface);
+					if(outTemplate.outputAlias){
+						targets.push({alias: outTemplate.outputAlias[out.name]});
+						continue;
+					}
+
+					let targetIndex = ifaceList.indexOf(out.iface);
+					let propAccessName = JSON.stringify(out.name);
+
+					targets.push({index: targetIndex, prop: '['+propAccessName+']'});
+				}
+
+				if(template.inputAlias?.[key] != null){
+					let setter = `bp_input_${ifaceIndex}_${portNameFlat}`;
+					inputFunc.push(`def ${setter}(v): ${template.inputAlias[key]} = v`);
+					inputs.push(`${portName}: [lambda: ${template.inputAlias[key]}, lambda v: ${setter}(v)]`);
+				}
+				else if(feature === Blackprint.Port.ArrayOf){
+					inputs.push(`${portName}: [lambda: [${targets.map(v => `bp_output_${v.index}${v.prop}`).join(',')}]]`);
+				}
+				else if(def == null){
+					let val = targets[0];
+					if(val.alias)
+						inputs.push(`${portName}: [lambda: ${val.alias}]`);
+					else {
+						inputs.push(`${portName}: [lambda: bp_output_${val.index}${val.prop}]`);
+					}
+				}
 				else {
 					let typed = typeof def;
 					let feature = IInput[key].feature;
@@ -42,21 +258,28 @@ Blackprint.Code.registerHandler({
 						if(def == null)
 							throw new Error(`${iface.namespace}: Trigger callback haven't been registered for input port "${key}"`);
 						
-						inputFunc.push(`def inp_f_${portName}(Input, Output):\n\t${def}`);
+						inputFunc.push(`def inp_f_${portNameFlat}(Input, Output):\n\t${def}`);
 
-						inputs.push(`"${portName}": lambda: inp_f_${portName}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex})`);
+						inputs.push(`${portName}: lambda: [inp_f_${portNameFlat}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex})]`);
 						continue;
 					}
 					else if(feature === Blackprint.Port.ArrayOf) def = [];
 					else if(typed !== 'string' && typed !== 'number' && typed !== 'boolean')
 						throw new Error(`Can't use default type of non-primitive type for "${key}" input port in "${iface.namespace}"`);
 
-					if(typed === 'boolean'){
-						inputs.push(`"${portName}": ${def ? 'True' : 'False'}`);
-						continue;
-					}
+					if(typed === 'boolean') def = def ? 'True' : 'False';
+					else def = def ? JSON.stringify(def) : 'None';
 
-					inputs.push(`"${portName}": ${def != null ? JSON.stringify(def) : 'None'}`);
+					let val = targets[0];
+					if(val == null)
+						inputs.push(`${portName}: [lambda: ${def}]`);
+					else {
+						if(val.alias)
+							inputs.push(`${portName}: [lambda: ${val.alias}]`);
+						else {
+							inputs.push(`${portName}: [lambda: bp_output_${val.index}${val.prop} if bp_output_${val.index}${val.prop} != None else ${JSON.stringify(def)}]`);
+						}
+					}
 				}
 			}
 		}
@@ -65,7 +288,8 @@ Blackprint.Code.registerHandler({
 		if(IOutput != null){
 			// let portIndex = 0;
 			for (let key in IOutput) {
-				let portName = /(^[^a-zA-Z]|\W)/m.test(key) ? JSON.stringify(key) : key;
+				let portName = JSON.stringify(key);
+				let portNameFlat = key.replace(/\W/g, '_');
 				let port = IOutput[key];
 
 				let targets = [];
@@ -74,32 +298,48 @@ Blackprint.Code.registerHandler({
 					let inp = cables[i].input;
 					if(inp == null || inp.isRoute) continue;
 
+					let inpTemplate = sharedData.template.get(inp.iface);
+					if(inpTemplate.inputAlias){
+						targets.push({alias: inpTemplate.inputAlias[inp.name]});
+						continue;
+					}
+
 					let targetIndex = ifaceList.indexOf(inp.iface);
 					let propAccessName = JSON.stringify(inp.name);
+					propAccessName = `[${propAccessName}]`;
 
 					targets.push({index: targetIndex, prop: propAccessName});
 				}
 
 				if(port.type !== Function){
 					if(port.isRoute){
-						outputs.push(`"${portName}": [lambda: bp_route_${routeIndex}_${outRoutes[key]}]`);
+						outputs.push(`${portName}: [lambda: bp_route_${routeIndex}_${outRoutes[key]}]`);
 						continue;
 					}
 
-					let temp = targets;
+					if(template.outputAlias?.[key] != null){
+						let setter = `bp_output_${ifaceIndex}_${portNameFlat}`;
+						outputFunc.push(`def ${setter}(v): ${template.outputAlias[key]} = v`);
+						outputs.push(`${portName}: [lambda: ${template.outputAlias[key]}, lambda v: ${setter}(v)]`);
+						continue;
+					}
 
-					// flatten
-					let getter = `bp_input_${temp[0].index}.get(${temp[0].prop})`;
-					let setter = targets.map(v => `set_(bp_input_${v.index}, ${v.prop}, v)`);
+					// portIndex++;
+					if(targets.length === 0) {
+						// Don't store any data if doesn't have cable
+						outputs.push(`${portName}: [lambda: 0, lambda: 0]`);
+						return;
+					}
 
-					// Take cached value from other port
-					// If possible we should avoid caching data in the output port
-					outputs.push(`"${portName}": [lambda: ${getter}, lambda v: (${setter.join(',')})]`);
+					let getter = `bp_data_${ifaceIndex}[${portName}]`;
+					let setter = `bp_output_${ifaceIndex}_${portNameFlat}`;
+					outputFunc.push(`def ${setter}(v): ${getter} = v`);
+					outputs.push(`${portName}: [lambda: ${getter}, lambda v: ${setter}(v)]`);
 				}
 				else {
-					let temp = targets.map(v => `bp_input_${v.index}[${v.prop}]()`);
-					outputFunc.push(`def out_f_${portName}():\n\t${temp.join('\n\t')}`);
-					outputs.push(`"${portName}": [lambda: out_f_${portName}]`.replace(/^					/gm, ''));
+					let temp = targets.map(v => `bp_input_${v.index}${v.prop}()`);
+					outputFunc.push(`def out_f_${portNameFlat}():\n\t${temp.join('\n\t')}`);
+					outputs.push(`${portName}: [lambda: out_f_${portNameFlat}]`.replace(/^					/gm, ''));
 				}
 			}
 		}
@@ -109,14 +349,39 @@ Blackprint.Code.registerHandler({
 		outputFunc = outputFunc.join('\n').trim();
 		if(outputFunc != '') outputFunc = outputFunc + '\n';
 
-		if(!variabels.has(ifaceIndex))
-			variabels.set(ifaceIndex, `${inputFunc}${outputFunc}bp_input_${ifaceIndex} = {${inputs.join(', ')}}\nbp_output_${ifaceIndex} = DataStorage({${outputs.join(', ')}})`);
+		if(!variabels.has(ifaceIndex)){
+			if(iface.namespace === 'BP/Fn/Input')
+				outputAlias = 'BpFnInput';
+
+			let input = '';
+			if(inputAlias) input = `bp_input_${ifaceIndex} = ${inputAlias}`;
+			else if(inputs.length !== 0)
+				input = `bp_input_${ifaceIndex} = bp_DataStorage_({${inputs.join(', ')}})`;
+			else input = `bp_input_${ifaceIndex} = None`;
+
+			if(input) input += '\n';
+
+			let output = '';
+			if(outputAlias) input = `bp_output_${ifaceIndex} = ${outputAlias}`;
+			else if(outputs.length !== 0){
+				output = `bp_output_${ifaceIndex} = bp_DataStorage_({${outputs.join(', ')}})`;
+
+				let props = Object.keys(IOutput).map(v => JSON.stringify(v) + ':None');
+				output += `\nbp_data_${ifaceIndex} = {${props.join(', ')}}`
+			}
+			else output = `bp_output_${ifaceIndex} = None`;
+
+			if(inputAlias || outputAlias || inputs.length || outputs.length)
+				variabels.set(ifaceIndex, `${inputFunc}${outputFunc}${input}${output}`);
+		}
 	},
 
 	// This will be called everytime code was generated for a node
 	onNodeCodeGenerated(result, { data, functionName, routes, iface, ifaceIndex, sharedData }){
+		let flatFunctionName = functionName.replace(/\W/g, '_');
+
 		if(data.type === Blackprint.CodeType.Callback){
-			result.code = `def ${functionName}(Input, Output, Route):\n\t${data.code.replace(/\n/g, '\n\t')}\n`;
+			result.code = `def ${flatFunctionName}(Input, Output, Route):\n\t${data.code.replace(/\n/g, '\n\t')}\n`;
 			result.selfRun = data.selfRun;
 
 			if(result.selfRun && this.constructor.routeIn === Blackprint.CodeRoute.MustHave)
@@ -129,19 +394,19 @@ Blackprint.Code.registerHandler({
 
 				// Only add if the event have an output (function parameter)
 				for (let key in param) {
-					paramInput = `\t# To trigger getter and setter\n\tfor x in bp_output_${ifaceIndex}:\n\t\tbp_output_${ifaceIndex}[x] = Input[x] if x in Input else None\n\n`;
+					paramInput = `\t\t# To trigger getter and setter\n\t\tfor x in bp_output_${ifaceIndex}:\n\t\t\tbp_output_${ifaceIndex}[x] = Input[x] if x in Input else None\n\n`;
 					break;
 				}
 			}
 
-			result.code = `${data.begin}\n${paramInput}{{+bp wrap_code_here }}\n${data.end}`;
+			result.code = `${data.begin}\n${paramInput}\t\t{{+bp wrap_code_here }}\n\t${data.end}`;
 		}
 		else if(data.type === Blackprint.CodeType.NotWrapped){
 			sharedData.nodeCodeNotWrapped ??= new Map();
-			sharedData.nodeCodeNotWrapped.set(functionName, data.code);
+			sharedData.nodeCodeNotWrapped.set(functionName+ifaceIndex, data.code);
 		}
 		// Default
-		else result.code = `def ${functionName}(Input, Output): \n\t${data.code}`;
+		else result.code = `def ${flatFunctionName}(Input, Output): \n\t${data.code}`;
 
 		if(iface.namespace === 'BP/Event/Listen'){
 			let exported = sharedData.exported ??= {};
@@ -155,17 +420,24 @@ Blackprint.Code.registerHandler({
 	generateExecutionTree({
 		ifaceIndex, iface, routeIndex, functionName, selfRun, result, codeClass,sharedData
 	}){
-		let prefix = `${codeClass.isReturn ? 'return ' : ''}${codeClass.isAsync ? 'await ' : ''}`;
+		let flatFunctionName = functionName.replace(/\W/g, '_');
+		if(functionName.startsWith('BPI/F/'))
+			flatFunctionName = `bp_func["${functionName.slice(6)}"]`;
+
+		let prefix = `${codeClass.isReturn ? 'return ' : ''}`;
 		if(selfRun){
-			result.selfRun += `${prefix}${functionName}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex}, { "Out": lambda: bp_route_${routeIndex}() })`;
+			result.selfRun += `${prefix}${flatFunctionName}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex}, { "Out": lambda: bp_route_${routeIndex}() })`;
 		}
 		else if(iface.type !== 'event'){
-			if(sharedData.nodeCodeNotWrapped?.has(functionName)){
-				result.codes.push(sharedData.nodeCodeNotWrapped.get(functionName).replace(/\bInput\b/gm, `bp_input_${ifaceIndex}`).replace(/\bOutput\b/gm, `bp_output_${ifaceIndex}`));
+			if(sharedData.nodeCodeNotWrapped?.has(functionName+ifaceIndex)){
+				let code = sharedData.nodeCodeNotWrapped.get(functionName+ifaceIndex).replace(/\bInput\b/gm, `bp_input_${ifaceIndex}`).replace(/\bOutput\b/gm, `bp_output_${ifaceIndex}`);
+
+				// Append only if not empty
+				if(code.trim()) result.codes.push(code);
 				return;
 			}
 
-			result.codes.push(`${prefix}${functionName}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex})`.replace(/^			/gm, ''));
+			result.codes.push(`${prefix}${flatFunctionName}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex})`.replace(/^			/gm, ''));
 		}
 	},
 
@@ -174,24 +446,22 @@ Blackprint.Code.registerHandler({
 		if(/(^[^a-zA-Z]|\W)/m.test(exportName)) throw new Error("Export name is a invalid variable name for Python");
 
 		let inits = ``;
-		inits += `# Data storages`;
-		inits += `\nclass DataStorage(object):
-	def __init__(self, _data): self._data = _data
-	def __getitem__(self, key): return self._data[key][0]()
-	def __setitem__(self, key, val): self._data[key][1](val)
-	def __iter__(self): return iter(self._data.keys())
-	def __len__(self): return dict.__len__(self._data)
-	def __delitem__(self, key): dict.__delitem__(self._data, key)
-	def __contains__(self, x): return dict.__contains__(self._data, x)
-	def get(self, key): return self._data[key][0]()
-	def keys(self): return self._data.keys()
-	def items(self): return self._data.items()
-	def values(self): return self._data.values()
+		inits += `from BlackprintCodeHelper import bp_DataStorage_, bp_Instance_`;
+		// inits += ``;
+		inits += `\n\n# Application module\n${exportName} = bp_Instance_({"Environment":{}})\nbp_var0 = {}\nbp_func = {}`;
 
-def set_(obj, key, val): obj[key] = val`;
-		inits += `\n\n${[...sharedData.variabels.values()].join('\n')}`;
+		inits += '\n\n# Node .update() functions\n' + ((Object.values(sharedData.nodeCode).join('\n').trim() || '# - This export has no shared function'));
 
-		let body = ('# Node .update() functions\n' + ((Object.values(sharedData.nodeCode).join('\n').trim() || '# - This export has no shared function') + '\n\n\n# ==== Begin of exported execution tree as functions ==== \n' + entryPoints.trim()).trim());
+		inits += `\n\n# ==== Data storages ==== `;
+
+		let varTemp = sharedData.variabels;
+		let ifaceList = sharedData.instance.ifaceList;
+		for (let [key, val] of varTemp) {
+			if(!val) continue;
+			inits += `\n\n# ${ifaceList[key].namespace}\n${val}`;
+		}
+
+		let body = ('\n# ==== Begin of exported execution tree as functions ==== \n' + entryPoints.trim()).trim();
 
 		let exported = sharedData.exported;
 		let exports = '';
@@ -218,12 +488,12 @@ def set_(obj, key, val): obj[key] = val`;
 			}
 			else params = '';
 
-			exports += `# - ${exportName}.${key}(${params})\n# \t=> ${temp.comment}`;
+			exports += `# - ${exportName}.on("${key}", ${params})\n# \t=> ${temp.comment}`;
 		}
 
 		let information = `# This code is automatically generated with Blackprint
 # 
-# Exported functions: \n${exports}
+# Available Events: \n${exports}
 # 
 
 `;
