@@ -2,7 +2,7 @@ Blackprint.Code.registerHandler({
 	languageName: 'JavaScript',
 	languageId: 'js',
 
-	routeFunction: `async function bp_route_{{+bp current_route_name }}(){\n{{+bp wrap_code_here }}\n}`,
+	routeFunction: `async function bp_route_{{+bp current_route_name }}(){\n\t{{+bp wrap_code_here }}\n}`,
 	routeFillEmpty: `/* Empty route */`,
 
 	internalNodes: {
@@ -306,9 +306,6 @@ Blackprint.Code.registerHandler({
 
 					propAccessName = propAccessName.slice(0, 1) === '"' ? '['+propAccessName+']' : '.'+propAccessName;
 
-					if(inp.feature === Blackprint.Port.ArrayOf)
-						propAccessName = `${propAccessName}[${inp.cables.indexOf(cables[i])}]`;
-
 					targets.push({index: targetIndex, prop: propAccessName});
 				}
 
@@ -321,6 +318,7 @@ Blackprint.Code.registerHandler({
 					if(template.outputAlias?.[portName] != null){
 						outputs.push(`set ${portName}(v){ ${template.outputAlias[portName]} = v }`);
 						outputs.push(`get ${portName}(){ return ${template.outputAlias[portName]} }`);
+						continue;
 					}
 
 					// portIndex++;
@@ -341,9 +339,8 @@ Blackprint.Code.registerHandler({
 		}
 
 		if(!variabels.has(ifaceIndex)){
-			if(iface.namespace === 'BP/Fn/Input'){
+			if(iface.namespace === 'BP/Fn/Input')
 				outputAlias = 'BpFnInput';
-			}
 
 			let input = '';
 			if(inputAlias) input = `let bp_input_${ifaceIndex} = ${inputAlias}; `;
@@ -364,10 +361,10 @@ Blackprint.Code.registerHandler({
 
 	// This will be called everytime code was generated for a node
 	onNodeCodeGenerated(result, { data, functionName, routes, iface, ifaceIndex, sharedData }){
-		functionName = functionName.replace(/\W/g, '_');
+		let flatFunctionName = functionName.replace(/\W/g, '_');
 
 		if(data.type === Blackprint.CodeType.Callback){
-			result.code = `function ${functionName}(Input, Output, Route){\n\t${data.code.replace(/\n/g, '\n\t')}\n}`;
+			result.code = `function ${flatFunctionName}(Input, Output, Route){\n\t${data.code.replace(/\n/g, '\n\t')}\n}`;
 			result.selfRun = data.selfRun;
 
 			if(result.selfRun && this.constructor.routeIn === Blackprint.CodeRoute.MustHave)
@@ -378,14 +375,14 @@ Blackprint.Code.registerHandler({
 			if(iface.namespace === 'BP/Event/Listen')
 				paramInput = `\tbp_output_${ifaceIndex} = Input;\n`;
 
-			result.code = `${data.begin}\n${paramInput}{{+bp wrap_code_here }}\n${data.end}`;
+			result.code = `${data.begin}\n${paramInput}\t{{+bp wrap_code_here }}\n${data.end}`;
 		}
 		else if(data.type === Blackprint.CodeType.NotWrapped){
 			sharedData.nodeCodeNotWrapped ??= new Map();
 			sharedData.nodeCodeNotWrapped.set(functionName+ifaceIndex, data.code);
 		}
 		// Default
-		else result.code = `function ${functionName}(Input, Output){ ${data.code} }`;
+		else result.code = `function ${flatFunctionName}(Input, Output){ ${data.code} }`;
 
 		if(iface.namespace === 'BP/Event/Listen'){
 			let exported = sharedData.exported ??= {};
@@ -399,13 +396,14 @@ Blackprint.Code.registerHandler({
 	generateExecutionTree({
 		ifaceIndex, iface, routeIndex, functionName, selfRun, result, codeClass, sharedData
 	}){
+		let flatFunctionName = functionName.replace(/\W/g, '_');
+
 		if(functionName.startsWith('BPI/F/'))
-			functionName = `bp_func["${functionName.slice(6)}"]`;
-		else functionName = functionName.replace(/\W/g, '_');
+		flatFunctionName = `bp_func["${functionName.slice(6)}"]`;
 
 		let prefix = `${codeClass.isReturn ? 'return ' : ''}${codeClass.isAsync ? 'await ' : ''}`;
 		if(selfRun){
-			result.selfRun += `${prefix}${functionName}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex}, {Out(){ bp_route_${routeIndex}(); }});`;
+			result.selfRun += `${prefix}${flatFunctionName}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex}, {Out(){ bp_route_${routeIndex}(); }});`;
 		}
 		else if(iface.type !== 'event'){
 			if(sharedData.nodeCodeNotWrapped?.has(functionName+ifaceIndex)){
@@ -416,7 +414,7 @@ Blackprint.Code.registerHandler({
 				return;
 			}
 
-			result.codes.push(`await ${prefix}${functionName}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex});`.replace(/^			/gm, ''));
+			result.codes.push(`await ${prefix}${flatFunctionName}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex});`.replace(/^			/gm, ''));
 		}
 	},
 
@@ -468,13 +466,13 @@ Blackprint.Code.registerHandler({
 			}
 			else params = '';
 
-			exports += `- ${exportName}.${key}(${params})\n \t=> ${temp.comment}`;
+			exports += `- ${exportName}.on("${key}", ${params})\n \t=> ${temp.comment}`;
 		}
 
 		let information = `/*
 This code is automatically generated with Blackprint
 
-Exported functions: \n${exports}
+Available Events: \n${exports}
 
 */
 

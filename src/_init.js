@@ -276,9 +276,12 @@ function fromNode(iface, language, sharedData, stopUntil, routeIndex){
 	if(selfRun) selfRun += '\n';
 	if(outRoutesFunc) outRoutesFunc += '\n';
 
-	// if(codes.join('\n\t').trim().length === 0) debugger;
+	let whiteSpace = wrapper.match(/^\s+(?={{\+bp wrap_code_here }})/m)?.[0] || '';
 
-	return selfRun + outRoutesFunc + wrapper.replace('{{+bp wrap_code_here }}', '\t'+(codes.join('\n\t') || handler.routeFillEmpty));
+	let _codes = codes.join('\n'+whiteSpace);
+	if(_codes.trim().length === 0) _codes = handler.routeFillEmpty;
+
+	return selfRun + outRoutesFunc + wrapper.replace('{{+bp wrap_code_here }}', _codes);
 }
 
 function tidyLines(str){
