@@ -360,11 +360,12 @@ Blackprint.Code.registerHandler({
 	},
 
 	// This will be called everytime code was generated for a node
-	onNodeCodeGenerated(result, { data, functionName, routes, iface, ifaceIndex, sharedData }){
+	onNodeCodeGenerated(result, { data, functionName, routes, iface, ifaceIndex, sharedData, codeClass }){
 		let flatFunctionName = functionName.replace(/\W/g, '_');
+		let prefix = `${codeClass.isAsync ? 'async ' : ''}`;
 
 		if(data.type === Blackprint.CodeType.Callback){
-			result.code = `function ${flatFunctionName}(Input, Output, Route){\n\t${data.code.replace(/\n/g, '\n\t')}\n}`;
+			result.code = `${prefix}function ${flatFunctionName}(Input, Output, Route){\n\t${data.code.replace(/\n/g, '\n\t')}\n}`;
 			result.selfRun = data.selfRun;
 
 			if(result.selfRun && this.constructor.routeIn === Blackprint.CodeRoute.MustHave)
@@ -382,7 +383,7 @@ Blackprint.Code.registerHandler({
 			sharedData.nodeCodeNotWrapped.set(functionName+ifaceIndex, data.code);
 		}
 		// Default
-		else result.code = `function ${flatFunctionName}(Input, Output){ ${data.code} }`;
+		else result.code = `${prefix}function ${flatFunctionName}(Input, Output){ ${data.code} }`;
 
 		if(iface.namespace === 'BP/Event/Listen'){
 			let exported = sharedData.exported ??= {};
@@ -414,7 +415,7 @@ Blackprint.Code.registerHandler({
 				return;
 			}
 
-			result.codes.push(`await ${prefix}${flatFunctionName}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex});`.replace(/^			/gm, ''));
+			result.codes.push(`${prefix}${flatFunctionName}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex});`.replace(/^			/gm, ''));
 		}
 	},
 
@@ -468,7 +469,7 @@ Blackprint.Code.registerHandler({
 
 			exports += `- ${exportName}.on("${key}", ${params})\n \t=> ${temp.comment}`;
 		}
-
+		
 		let information = `/*
 This code is automatically generated with Blackprint
 
@@ -476,6 +477,7 @@ Available Events: \n${exports}
 
 */
 
+;let bp_var0 = {}; let bp_func = {};
 `;
 
 		if(sharedData.exportName === false){
@@ -515,7 +517,6 @@ Available Events: \n${exports}
 			}
 			functions = '\n' + functions.join('\n');
 
-			let declareInit = `;let bp_var0 = {}; let bp_func = {};`;
 			return information + declareInit + variabels + functions + '\n\n' + inits + '\n\t' + body + `\n\n\treturn exports;\n})();\n\nexport { ${exportName} };`;
 		}
 	},
