@@ -29,7 +29,7 @@ Blackprint.Code.registerHandler({
 			return {
 				type: Blackprint.CodeType.NotWrapped,
 				name: name,
-				code: `${exportName}.Environment[${JSON.stringify(name)}] = Input.Val`,
+				code: `${exportName}.Environment[${JSON.stringify(name)}] = Input["Val"]`,
 			};
 		},
 
@@ -56,7 +56,7 @@ Blackprint.Code.registerHandler({
 			return {
 				type: Blackprint.CodeType.NotWrapped,
 				name: name,
-				code: `bp_var${data.scope}[${JSON.stringify(name)}] = Input.Val`,
+				code: `bp_var${data.scope}[${JSON.stringify(name)}] = Input["Val"]`,
 			};
 		},
 
@@ -93,9 +93,7 @@ Blackprint.Code.registerHandler({
 						let cables = port.cables;
 						if(cables.length === 0) continue;
 
-						let key_ = /(^[^a-zA-Z]|\W)/m.test(key) ? JSON.stringify(key) : key;
-						key_ = key_.slice(0, 1) === '"' ? '['+key_+']' : '.'+key_;
-
+						let key_ = `[${JSON.stringify(key)}]`;
 						if(port.feature === Blackprint.Port.ArrayOf){
 							let temp = [];
 							for (let i=0; i < cables.length; i++) {
@@ -143,7 +141,7 @@ Blackprint.Code.registerHandler({
 			return {
 				type: Blackprint.CodeType.NotWrapped,
 				name: name,
-				code: `BpFnOutput["${data.name}"] = Input.Val;`,
+				code: `BpFnOutput["${data.name}"] = Input["Val"]`,
 			};
 		},
 		functionVarInput(routes){
@@ -258,9 +256,9 @@ Blackprint.Code.registerHandler({
 						if(def == null)
 							throw new Error(`${iface.namespace}: Trigger callback haven't been registered for input port "${key}"`);
 						
-						inputFunc.push(`def inp_f_${portNameFlat}(Input, Output):\n\t${def}`);
+						inputFunc.push(`def inp_f_${portNameFlat}(Input, Output):\n\t${def}\ndef c_inp_f_${portNameFlat}(): inp_f_${portNameFlat}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex})`);
 
-						inputs.push(`${portName}: lambda: [inp_f_${portNameFlat}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex})]`);
+						inputs.push(`${portName}: [lambda: c_inp_f_${portNameFlat}]`);
 						continue;
 					}
 					else if(feature === Blackprint.Port.ArrayOf) def = [];
@@ -268,7 +266,7 @@ Blackprint.Code.registerHandler({
 						throw new Error(`Can't use default type of non-primitive type for "${key}" input port in "${iface.namespace}"`);
 
 					if(typed === 'boolean') def = def ? 'True' : 'False';
-					else def = def ? JSON.stringify(def) : 'None';
+					else def = def != null ? JSON.stringify(def) : 'None';
 
 					let val = targets[0];
 					if(val == null)
@@ -277,7 +275,7 @@ Blackprint.Code.registerHandler({
 						if(val.alias)
 							inputs.push(`${portName}: [lambda: ${val.alias}]`);
 						else {
-							inputs.push(`${portName}: [lambda: bp_output_${val.index}${val.prop} if bp_output_${val.index}${val.prop} != None else ${JSON.stringify(def)}]`);
+							inputs.push(`${portName}: [lambda: bp_output_${val.index}${val.prop} if bp_output_${val.index}${val.prop} != None else ${def}]`);
 						}
 					}
 				}
@@ -285,7 +283,7 @@ Blackprint.Code.registerHandler({
 		}
 
 		let outputFunc = [];
-		if(IOutput != null){
+		if(IOutput != null && iface.namespace !== 'BP/Fn/Input'){
 			// let portIndex = 0;
 			for (let key in IOutput) {
 				let portName = JSON.stringify(key);
@@ -446,22 +444,30 @@ Blackprint.Code.registerHandler({
 		if(/(^[^a-zA-Z]|\W)/m.test(exportName)) throw new Error("Export name is a invalid variable name for Python");
 
 		let inits = ``;
-		inits += `from BlackprintCodeHelper import bp_DataStorage_, bp_Instance_`;
-		// inits += ``;
-		inits += `\n\n# Application module\n${exportName} = bp_Instance_({"Environment":{}})\nbp_var0 = {}\nbp_func = {}`;
+		if(sharedData.exportName !== false){
+			// inits += ``;
+			inits += `\n\n# Application module\n${exportName} = bp_Instance_({"Environment":{}})`;
 
-		inits += '\n\n# Node .update() functions\n' + ((Object.values(sharedData.nodeCode).join('\n').trim() || '# - This export has no shared function'));
+			inits += '\n\n# Node .update() functions\n' + ((Object.values(sharedData.nodeCode).join('\n').trim() || '# - This export has no shared function'));
+		}
 
-		inits += `\n\n# ==== Data storages ==== `;
+		if(exportName)
+			inits += `\n\ndef _mainInstance():`;
+		else inits += `\n`;
+
+		inits += `\n\t# ==== Data storages ==== `;
 
 		let varTemp = sharedData.variabels;
 		let ifaceList = sharedData.instance.ifaceList;
 		for (let [key, val] of varTemp) {
 			if(!val) continue;
-			inits += `\n\n# ${ifaceList[key].namespace}\n${val}`;
+			val = val.split('\n').join('\n\t');
+			inits += `\n\n\t# ${ifaceList[key].namespace}\n\t${val}`;
 		}
 
-		let body = ('\n# ==== Begin of exported execution tree as functions ==== \n' + entryPoints.trim()).trim();
+		let entrypoint_ = entryPoints.trim().split('\n').join('\n\t');
+
+		let body = ('\n\t# ==== Begin of exported execution tree as functions ==== \n\t' + entrypoint_).trim();
 
 		let exported = sharedData.exported;
 		let exports = '';
@@ -491,13 +497,56 @@ Blackprint.Code.registerHandler({
 			exports += `# - ${exportName}.on("${key}", ${params})\n# \t=> ${temp.comment}`;
 		}
 
+		let imports = ['from BlackprintCodeHelper import bp_DataStorage_, bp_Instance_'];
 		let information = `# This code is automatically generated with Blackprint
 # 
 # Available Events: \n${exports}
 # 
 
+${imports.join('\n')}
+bp_var0 = {}\nbp_func = {}
 `;
-// # Application module\nlet ${exportName} = (function(){
-		return information + inits + '\n\n' + body;
+
+		if(sharedData.exportName === false){
+			// Private Vars
+			let variabels = [];
+			let list2 = Blackprint.Code.utils.getFlatNamespace(sharedData.instance.variables);
+			for (let key in list2)
+				variabels.push(`bp_var1["${key}"] = None`);
+
+			// Shared Vars
+			let list3 = Blackprint.Code.utils.getFlatNamespace(sharedData.instance.sharedVariables);
+			for (let key in list3)
+				variabels.push(`bp_var2["${key}"] = None`);
+
+			if(variabels.length === 0) variabels = '';
+			else variabels = '\n' + variabels.join('\n');
+
+			return `\n\tbp_var1 = {}\n\tbp_var2 = {}` + variabels + inits + '\n\n\t' + body + '\n';
+		}
+		else {
+			// Public Vars
+			let variabels = [];
+			let list2 = Blackprint.Code.utils.getFlatNamespace(sharedData.instance.variables);
+			for (let key in list2)
+				variabels.push(`bp_var0["${key}"] = None`);
+
+			variabels = '\n' + variabels.join('\n');
+
+			// Functions
+			let functions = [];
+			let list1 = Blackprint.Code.utils.getFlatNamespace(sharedData.instance.functions);
+			for (let key in list1) {
+				let temp = new Blackprint.Skeleton(list1[key].structure);
+				let codeTemp = Blackprint.Code.generateFrom(temp.ifaceList[0], 'python', false, sharedData);
+				let flatFunctionName = key.replace(/\W/g, '_');
+
+				functions.push(`def ${flatFunctionName}(BpFnInput, BpFnOutput={}):${codeTemp}\n\tbp_route_0_0()\n\treturn BpFnOutput\nbp_func["${key}"] = ${flatFunctionName}`);
+			}
+
+			functions = '\n' + functions.join('\n');
+
+			return information + variabels + functions + '\n\n' + inits + '\n\n\t' + body + '\n\tbp_route_0_0()\n\n_mainInstance()';
+		}
 	},
 });
