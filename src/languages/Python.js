@@ -2,7 +2,7 @@ Blackprint.Code.registerHandler({
 	languageName: 'Python',
 	languageId: 'python',
 
-	routeFunction: `def bp_route_{{+bp current_route_name }}():\n\t{{+bp wrap_code_here }}\n`,
+	routeFunction: `def bp_route_{{+bp current_route_name }}():\n\t{{+bp wrap_code_here }}`,
 	routeFillEmpty: `pass # Empty route`,
 
 	internalNodes: {
@@ -68,7 +68,7 @@ Blackprint.Code.registerHandler({
 			return {
 				type: Blackprint.CodeType.NotWrapped,
 				name: name,
-				code: `bp_func[${JSON.stringify(name)}](bp_input_${ifaceIndex}, bp_output_${ifaceIndex})`,
+				code: `bp_func_${ifaceIndex}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex})`,
 			};
 		},
 
@@ -119,7 +119,7 @@ Blackprint.Code.registerHandler({
 							list.push(`BpFnOutput${key_} = ${append}`);
 						}
 
-						this.code = `# <-- FnOutput\n\t${list.join('; ')};`;
+						this.code = `# <-- FnOutput\n\t${list.join('; ')}`;
 					}
 				}
 			};
@@ -172,7 +172,7 @@ Blackprint.Code.registerHandler({
 				type: Blackprint.CodeType.Wrapper,
 				name: name,
 				begin: `def ${flatName}(Input):`,
-				end: `${exportName}.on("${namespace}", ${flatName})\n`,
+				end: `${exportName}.on("${namespace}", ${flatName})`,
 				input: {
 					Reset: 'pass # 1',
 					Off: 'pass # 1',
@@ -206,6 +206,9 @@ Blackprint.Code.registerHandler({
 		let inputAlias = false, outputAlias = false;
 		let { IInput, IOutput } = iface.ref;
 		let template = sharedData.template.get(iface);
+
+		if(iface.namespace === 'BP/Fn/Output' || iface.namespace === 'BP/Var/Get' || iface.namespace === 'BP/Env/Get')
+			return;
 
 		let inputFunc = [];
 		if(IInput != null){
@@ -348,8 +351,10 @@ Blackprint.Code.registerHandler({
 		if(outputFunc != '') outputFunc = outputFunc + '\n';
 
 		if(!variabels.has(ifaceIndex)){
-			if(iface.namespace === 'BP/Fn/Input')
-				outputAlias = 'BpFnInput';
+			if(iface.namespace === 'BP/Fn/Input'){
+				sharedData.mainShared.fnOutputVar = `bp_output_${ifaceIndex}`;
+				outputAlias = '{}';
+			}
 
 			let input = '';
 			if(inputAlias) input = `bp_input_${ifaceIndex} = ${inputAlias}`;
@@ -369,8 +374,14 @@ Blackprint.Code.registerHandler({
 			}
 			else output = `bp_output_${ifaceIndex} = None`;
 
+			let fnInstance = '';
+			if(iface.namespace.startsWith('BPI/F/')){
+				let functionName = iface.namespace.replace('BPI/F/', '');
+				fnInstance = `\nbp_func_${ifaceIndex} = bp_func["${functionName}"]()`;
+			}
+
 			if(inputAlias || outputAlias || inputs.length || outputs.length)
-				variabels.set(ifaceIndex, `${inputFunc}${outputFunc}${input}${output}`);
+				variabels.set(ifaceIndex, `${inputFunc}${outputFunc}${input}${output}${fnInstance}`);
 		}
 	},
 
@@ -418,13 +429,13 @@ Blackprint.Code.registerHandler({
 	generateExecutionTree({
 		ifaceIndex, iface, routeIndex, functionName, selfRun, result, codeClass,sharedData
 	}){
-		let flatFunctionName = functionName.replace(/\W/g, '_');
+		let funcInstanceName = functionName.replace(/\W/g, '_');
 		if(functionName.startsWith('BPI/F/'))
-			flatFunctionName = `bp_func["${functionName.slice(6)}"]`;
+			funcInstanceName = `bp_func_${ifaceIndex}`;
 
 		let prefix = `${codeClass.isReturn ? 'return ' : ''}`;
 		if(selfRun){
-			result.selfRun += `${prefix}${flatFunctionName}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex}, { "Out": lambda: bp_route_${routeIndex}() })`;
+			result.selfRun += `${prefix}${funcInstanceName}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex}, { "Out": lambda: bp_route_${routeIndex}() })`;
 		}
 		else if(iface.type !== 'event'){
 			if(sharedData.nodeCodeNotWrapped?.has(functionName+ifaceIndex)){
@@ -435,7 +446,7 @@ Blackprint.Code.registerHandler({
 				return;
 			}
 
-			result.codes.push(`${prefix}${flatFunctionName}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex})`.replace(/^			/gm, ''));
+			result.codes.push(`${prefix}${funcInstanceName}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex})`.replace(/^			/gm, ''));
 		}
 	},
 
@@ -504,25 +515,25 @@ Blackprint.Code.registerHandler({
 # 
 
 ${imports.join('\n')}
-bp_var0 = {}\nbp_func = {}
+bp_var0 = {}; bp_svar2 = {}; bp_func = {}
 `;
 
 		if(sharedData.exportName === false){
 			// Private Vars
 			let variabels = [];
-			let list2 = Blackprint.Code.utils.getFlatNamespace(sharedData.instance.variables);
-			for (let key in list2)
-				variabels.push(`bp_var1["${key}"] = None`);
+			// let list2 = Blackprint.Code.utils.getFlatNamespace(sharedData.instance.variables);
+			// for (let key in list2)
+			// 	variabels.push(`bp_var1["${key}"] = None`);
 
 			// Shared Vars
-			let list3 = Blackprint.Code.utils.getFlatNamespace(sharedData.instance.sharedVariables);
-			for (let key in list3)
-				variabels.push(`bp_var2["${key}"] = None`);
+			// let list3 = Blackprint.Code.utils.getFlatNamespace(sharedData.instance.sharedVariables);
+			// for (let key in list3)
+			// 	variabels.push(`bp_var2["${key}"] = None`);
 
 			if(variabels.length === 0) variabels = '';
 			else variabels = '\n' + variabels.join('\n');
 
-			return `\n\tbp_var1 = {}\n\tbp_var2 = {}` + variabels + inits + '\n\n\t' + body + '\n';
+			return `\n\tbp_var1 = {}` + variabels + inits + '\n\n\t' + body + '\n';
 		}
 		else {
 			// Public Vars
@@ -541,7 +552,7 @@ bp_var0 = {}\nbp_func = {}
 				let codeTemp = Blackprint.Code.generateFrom(temp.ifaceList[0], 'python', false, sharedData);
 				let flatFunctionName = key.replace(/\W/g, '_');
 
-				functions.push(`def ${flatFunctionName}(BpFnInput, BpFnOutput={}):${codeTemp}\n\tbp_route_0_0()\n\treturn BpFnOutput\nbp_func["${key}"] = ${flatFunctionName}`);
+				functions.push(`bp_svar2["${key}"] = {}\ndef bpf_${flatFunctionName}():\n\tBpFnOutput = {}\n\tbp_var2 = bp_svar2["${key}"]${codeTemp}\n\tdef bp_instanceCall_(BpFnInput, _BpFnOutput={}):\n\t\tnonlocal BpFnOutput, ${sharedData.fnOutputVar}\n\t\tBpFnOutput = _BpFnOutput\n\t\t${sharedData.fnOutputVar} = BpFnInput\n\t\tbp_route_0_0()\n\t\treturn BpFnOutput\n\treturn bp_instanceCall_\nbp_func["${key}"] = bpf_${flatFunctionName}`);
 			}
 
 			functions = '\n' + functions.join('\n');
