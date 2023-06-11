@@ -2,7 +2,8 @@ Blackprint.Code.registerHandler({
 	languageName: 'JavaScript',
 	languageId: 'js',
 
-	routeFunction: `async function bp_route_{{+bp current_route_name }}(){\n\t{{+bp wrap_code_here }}\n}`,
+	routeFunction: `async function {{+bp current_route_name }}(){\n\t{{+bp wrap_code_here }}\n}`,
+	routeFunctionName: `bp_route_{{+bp index }}`,
 	routeFillEmpty: `/* Empty route */`,
 
 	internalNodes: {
@@ -68,7 +69,7 @@ Blackprint.Code.registerHandler({
 			return {
 				type: Blackprint.CodeType.NotWrapped,
 				name: name,
-				code: `await bp_func["${name}"](bp_input_${ifaceIndex}, bp_output_${ifaceIndex});`,
+				code: `await bp_func_${ifaceIndex}.call(bp_input_${ifaceIndex}, bp_output_${ifaceIndex});`,
 			};
 		},
 
@@ -78,9 +79,7 @@ Blackprint.Code.registerHandler({
 			function getInput(out){
 				let ifaceList = node.instance.ifaceList;
 				let targetIndex = ifaceList.indexOf(out.iface);
-				let propAccessName = /(^[^a-zA-Z]|\W)/m.test(out.name) ? JSON.stringify(out.name) : out.name;
-
-				propAccessName = propAccessName.slice(0, 1) === '"' ? '['+propAccessName+']' : '.'+propAccessName;
+				let propAccessName = jsProp(out.name);
 
 				return `${targetIndex}${propAccessName}`;
 			}
@@ -94,10 +93,10 @@ Blackprint.Code.registerHandler({
 					for (let key in input) {
 						let port = input[key];
 						let cables = port.cables;
-						if(cables.length === 0) continue;
+						if(cables.length === 0 || port.type === Function)
+							continue;
 
-						let key_ = /(^[^a-zA-Z]|\W)/m.test(key) ? JSON.stringify(key) : key;
-						key_ = key_.slice(0, 1) === '"' ? '['+key_+']' : '.'+key_;
+						let key_ = jsProp(key);
 
 						if(port.feature === Blackprint.Port.ArrayOf){
 							let temp = [];
@@ -209,15 +208,23 @@ Blackprint.Code.registerHandler({
 		},
 	},
 
+	createRouteCall({ routeIndex }){
+		return this.routeFunctionName.replace('{{+bp index }}', routeIndex) + '();';
+	},
+
 	generatePortsStorage({ iface, ifaceIndex, ifaceList, variabels, sharedData, routeIndex, outRoutes }){
 		let inputs = [], outputs = [];
 		let inputAlias = false, outputAlias = false;
 		let { IInput, IOutput } = iface.ref;
 		let template = sharedData.template.get(iface);
 
+		if(iface.namespace === 'BP/Fn/Output' || iface.namespace === 'BP/Var/Get' || iface.namespace === 'BP/Env/Get')
+			return;
+
 		if(IInput != null){
 			for (let key in IInput) {
-				let {default: def, feature, cables} = IInput[key];
+				let port = IInput[key];
+				let {default: def, cables} = port;
 				let portName = /(^[^a-zA-Z]|\W)/m.test(key) ? JSON.stringify(key) : key;
 
 				let targets = [];
@@ -239,11 +246,11 @@ Blackprint.Code.registerHandler({
 					targets.push({index: targetIndex, prop: propAccessName});
 				}
 
-				if(template.inputAlias?.[portName] != null){
-					inputs.push(`set ${portName}(v){ ${template.inputAlias[portName]} = v }`);
-					inputs.push(`get ${portName}(){ return ${template.inputAlias[portName]} }`);
+				if(template.inputAlias?.[key] != null){
+					inputs.push(`set ${portName}(v){ ${template.inputAlias[key]} = v }`);
+					inputs.push(`get ${portName}(){ return ${template.inputAlias[key]} }`);
 				}
-				else if(feature === Blackprint.Port.ArrayOf){
+				else if(port.feature === Blackprint.Port.ArrayOf){
 					inputs.push(`get ${portName}(){ return [${targets.map(v => `bp_output_${v.index}${v.prop}`).join(',')}] }`);
 				}
 				else if(def == null){
@@ -256,13 +263,16 @@ Blackprint.Code.registerHandler({
 				}
 				else {
 					let typed = typeof def;
-					let feature = IInput[key].feature;
+					let feature = port.feature;
 
 					if(feature === Blackprint.Port.Trigger){
 						def = template.input?.[key];
+						if(iface.namespace.startsWith('BPI/F/'))
+							def = `bp_func_${ifaceIndex}.input[${JSON.stringify(key)}]();`;
+
 						if(def == null)
 							throw new Error(`${iface.namespace}: Trigger callback haven't been registered for input port "${key}"`);
-						
+
 						inputs.push(`${portName}(Input, Output){ ${def} }`);
 						continue;
 					}
@@ -302,22 +312,33 @@ Blackprint.Code.registerHandler({
 					}
 
 					let targetIndex = ifaceList.indexOf(inp.iface);
-					let propAccessName = /(^[^a-zA-Z]|\W)/m.test(inp.name) ? JSON.stringify(inp.name) : inp.name;
+					let propAccessName = jsProp(inp.name);
 
-					propAccessName = propAccessName.slice(0, 1) === '"' ? '['+propAccessName+']' : '.'+propAccessName;
-
-					targets.push({index: targetIndex, prop: propAccessName});
+					targets.push({index: targetIndex, prop: propAccessName, iface: inp.iface});
 				}
 
 				if(port.type !== Function){
 					if(port.isRoute){
+						let cables = port.cables;
+						let targetIface;
+						for (let i=0; i < cables.length; i++) {
+							targetIface = cables[i].input?.iface;
+							if(targetIface != null) break;
+						}
+
+						if(targetIface && sharedData.routeIndexes.has(targetIface)){
+							let routeIndex_ = sharedData.routeIndexes.get(targetIface);
+							outputs.push(`get ${portName}(){ return bp_route_${routeIndex_}; }`);
+							continue;
+						}
+
 						outputs.push(`get ${portName}(){ return bp_route_${routeIndex}_${outRoutes[key]}; }`);
 						continue;
 					}
 
-					if(template.outputAlias?.[portName] != null){
-						outputs.push(`set ${portName}(v){ ${template.outputAlias[portName]} = v }`);
-						outputs.push(`get ${portName}(){ return ${template.outputAlias[portName]} }`);
+					if(template.outputAlias?.[key] != null){
+						outputs.push(`set ${portName}(v){ ${template.outputAlias[key]} = v }`);
+						outputs.push(`get ${portName}(){ return ${template.outputAlias[key]} }`);
 						continue;
 					}
 
@@ -332,15 +353,28 @@ Blackprint.Code.registerHandler({
 					}
 				}
 				else {
-					let temp = targets.map(v => `bp_input_${v.index + v.prop}(bp_input_${v.index}, bp_output_${v.index})`);
+					let temp = targets.map(v => {
+						if(v.iface.namespace === 'BP/Fn/Output' || v.iface.namespace === 'BP/FnVar/Output'){
+							return `BpFnOutput[${JSON.stringify(key)}]?.();`;
+						}
+
+						if(v.iface.namespace === 'BP/Var/Set'){
+							return `/* ToDo */`;
+						}
+
+						return `bp_input_${v.index + v.prop}(bp_input_${v.index}, bp_output_${v.index})`;
+					});
+
 					outputs.push(`${portName}(){ ${temp.join('; ')} }`.replace(/^					/gm, ''));
 				}
 			}
 		}
 
 		if(!variabels.has(ifaceIndex)){
-			if(iface.namespace === 'BP/Fn/Input')
-				outputAlias = 'BpFnInput';
+			if(iface.namespace === 'BP/Fn/Input'){
+				sharedData.mainShared.fnOutputVar = `bp_output_${ifaceIndex}`;
+				outputAlias = '{}';
+			}
 
 			let input = '';
 			if(inputAlias) input = `let bp_input_${ifaceIndex} = ${inputAlias}; `;
@@ -354,8 +388,14 @@ Blackprint.Code.registerHandler({
 				output = `let bp_output_${ifaceIndex} = {${outputs.join(', ')}};`;
 			else output = `let bp_output_${ifaceIndex} = null;`;
 
+			let fnInstance = '';
+			if(iface.namespace.startsWith('BPI/F/')){
+				let functionName = iface.namespace.replace('BPI/F/', '');
+				fnInstance = `let bp_func_${ifaceIndex} = bp_func["${functionName}"]()`;
+			}
+
 			if(inputAlias || outputAlias || inputs.length || outputs.length)
-				variabels.set(ifaceIndex, `${input}${output}`);
+				variabels.set(ifaceIndex, `${input}${output}${fnInstance}`);
 		}
 	},
 
@@ -397,14 +437,14 @@ Blackprint.Code.registerHandler({
 	generateExecutionTree({
 		ifaceIndex, iface, routeIndex, functionName, selfRun, result, codeClass, sharedData
 	}){
-		let flatFunctionName = functionName.replace(/\W/g, '_');
+		let funcInstanceName = functionName.replace(/\W/g, '_');
 
 		if(functionName.startsWith('BPI/F/'))
-		flatFunctionName = `bp_func["${functionName.slice(6)}"]`;
+			funcInstanceName = `bp_func_${ifaceIndex}.call`;
 
 		let prefix = `${codeClass.isReturn ? 'return ' : ''}${codeClass.isAsync ? 'await ' : ''}`;
 		if(selfRun){
-			result.selfRun += `${prefix}${flatFunctionName}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex}, {Out(){ bp_route_${routeIndex}(); }});`;
+			result.selfRun += `${prefix}${funcInstanceName}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex}, {Out(){ bp_route_${routeIndex}(); }});`;
 		}
 		else if(iface.type !== 'event'){
 			if(sharedData.nodeCodeNotWrapped?.has(functionName+ifaceIndex)){
@@ -415,12 +455,12 @@ Blackprint.Code.registerHandler({
 				return;
 			}
 
-			result.codes.push(`${prefix}${flatFunctionName}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex});`.replace(/^			/gm, ''));
+			result.codes.push(`${prefix}${funcInstanceName}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex});`.replace(/^			/gm, ''));
 		}
 	},
 
 	// You can wrap the generated code from here
-	finalCodeResult(exportName, sharedData, entryPoints){
+	async finalCodeResult(exportName, sharedData, entryPoints){
 		if(/(^[^a-zA-Z]|\W)/m.test(exportName)) throw new Error("Export name is a invalid variable name for JavaScript");
 
 		let inits = '';
@@ -477,25 +517,25 @@ Available Events: \n${exports}
 
 */
 
-;let bp_var0 = {}; let bp_func = {};
+;let bp_var0 = {}; let bp_svar2 = {}; let bp_func = {};
 `;
 
 		if(sharedData.exportName === false){
 			// Private Vars
 			let variabels = [];
-			let list2 = Blackprint.Code.utils.getFlatNamespace(sharedData.instance.variables);
-			for (let key in list2)
-				variabels.push(`bp_var1["${key}"] = null;`);
+			// let list2 = Blackprint.Code.utils.getFlatNamespace(sharedData.instance.variables);
+			// for (let key in list2)
+			// 	variabels.push(`bp_var1["${key}"] = null;`);
 
 			// Shared Vars
-			let list3 = Blackprint.Code.utils.getFlatNamespace(sharedData.instance.sharedVariables);
-			for (let key in list3)
-				variabels.push(`bp_var2["${key}"] = null;`);
+			// let list3 = Blackprint.Code.utils.getFlatNamespace(sharedData.instance.sharedVariables);
+			// for (let key in list3)
+			// 	variabels.push(`bp_var2["${key}"] = null;`);
 
 			if(variabels.length === 0) variabels = '';
 			else variabels = '\n' + variabels.join('\n');
 
-			return `\n\tlet bp_var1 = {}; let bp_var2 = {};` + variabels + inits + '\n\n\t' + body + '\n';
+			return `\n\tlet bp_var1 = {};` + variabels + inits + '\n\n\t' + body + '\n';
 		}
 		else {
 			// Public Vars
@@ -510,14 +550,58 @@ Available Events: \n${exports}
 			let functions = [];
 			let list1 = Blackprint.Code.utils.getFlatNamespace(sharedData.instance.functions);
 			for (let key in list1) {
-				let temp = new Blackprint.Skeleton(list1[key].structure);
-				let codeTemp = Blackprint.Code.generateFrom(temp.ifaceList[0], 'js', false, sharedData);
+				let temp = await Blackprint.Code.utils.createDummyFunction(key, sharedData.instance);
+				let bpInstance = temp.iface.bpInstance;
 
-				functions.push(`bp_func["${key}"] = async function(BpFnInput, BpFnOutput={}){${codeTemp}\n\tawait bp_route_0_0(); return BpFnOutput;\n}`);
+				let fnInput = bpInstance.getNodes('BP/Fn/Input')[0];
+				let fnInputCallables = {};
+
+				sharedData.functionTemplate = list1[key];
+				let codeTemp = await Blackprint.Code.generateFrom(fnInput.iface, 'js', false, sharedData);
+				sharedData.functionTemplate = null;
+
+				[fnInput, ...bpInstance.getNodes('BP/FnVar/Input')].forEach(v => {
+					let temp = v.iface.output;
+					for (let key in temp) {
+						let port = temp[key];
+						if(port.type !== Function) continue;
+						if(v.iface.namespace === 'BP/FnVar/Input')
+							key = v.iface.data.name;
+
+						let cables = port.cables;
+						let codes = fnInputCallables[key] ??= [];
+						for (let i=0; i < cables.length; i++) {
+							let cable = cables[i];
+							if(cable.input == null) continue;
+
+							let portName = cable.input.name;
+							portName = jsProp(portName);
+
+							let targetIndex = bpInstance.ifaceList.indexOf(cable.input.iface);
+							codes.push(`bp_input_${targetIndex}${portName}(bp_input_${targetIndex}, bp_output_${targetIndex})`);
+						}
+					}
+				});
+
+				temp.instance.destroy();
+
+				fnInputCallables = Object.entries(fnInputCallables).map(([key, value]) => {
+					if(/(^[^a-zA-Z]|\W)/m.test(key)) key = JSON.stringify(key);
+					return `${key}(){ ${value.join('; ')} }`
+				}).join(', ');
+
+				functions.push(`bp_svar2["${key}"] = {}; bp_func["${key}"] = function(){\n\tlet BpFnOutput = {};\n\tlet bp_var2 = bp_svar2["${key}"];${codeTemp}\n\tlet bp_input = { ${fnInputCallables} };let bp_output = {};\n\treturn {\n\t\tinput: bp_input,\n\t\toutput: bp_output,\n\t\tcall: async function(BpFnInput=bp_input, _BpFnOutput=bp_output){\n\t\t\tBpFnOutput = _BpFnOutput;\n\t\t\t${sharedData.fnOutputVar} = BpFnInput;\n\t\t\tbp_route_0_0();\n\t\t\treturn BpFnOutput;\n\t\t}\n\t}\n}`);
 			}
 			functions = '\n' + functions.join('\n');
 
-			return information + declareInit + variabels + functions + '\n\n' + inits + '\n\t' + body + `\n\n\treturn exports;\n})();\n\nexport { ${exportName} };`;
+			return information + variabels + functions + '\n\n' + inits + '\n\t' + body + `\n\n\treturn exports;\n})();\n\nexport { ${exportName} };`;
 		}
 	},
 });
+
+function jsProp(name){
+	let propAccessName = /(^[^a-zA-Z]|\W)/m.test(name) ? JSON.stringify(name) : name;
+	propAccessName = propAccessName.slice(0, 1) === '"' ? '['+propAccessName+']' : '.'+propAccessName;
+
+	return propAccessName;
+}
