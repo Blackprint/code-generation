@@ -114,6 +114,7 @@ async function fromInstance(instance, language, sharedData){
 		if(namespace.startsWith('BPI/F/')) namespace = 'BPI/F';
 
 		let handler = codesHandler[namespace];
+		if(handler == null) throw new Error(`Blackprint.Code haven't been registered for: ${namespace}`);
 		let { routeIn } = handler.routeRules?.(iface) || handler;
 
 		if(routeIn === CodeRoute.Optional || routeIn === CodeRoute.None)
@@ -196,8 +197,9 @@ async function fromNode(iface, language, sharedData, stopUntil, routeIndex){
 		if(iface_.namespace === 'BP/FnVar/Input' || iface_.namespace === 'BP/Fn/Input'){
 			let outputs = iface_.output;
 			for (let key in outputs) {
-				if(outputs[key].type === Function){
-					let cables = outputs[key].cables;
+				let output = outputs[key];
+				if(output.type === Blackprint.Types.Trigger){
+					let cables = output.cables;
 					for (let i=0; i < cables.length; i++) {
 						let cable = cables[i];
 						let inIface = cable.input?.iface;

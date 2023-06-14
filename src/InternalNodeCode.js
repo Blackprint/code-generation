@@ -13,12 +13,30 @@ Blackprint.registerCode('BP/Env/Get', BPEnvGet);
 class BPVarGet extends Blackprint.Code {
 	static routeIn = Blackprint.CodeRoute.Optional;
 	static routeOut = Blackprint.CodeRoute.MustHave;
+
+	static routeRules(iface){
+		if(iface.output.Val.type === Blackprint.Types.Trigger){
+			return {
+				routeIn: Blackprint.CodeRoute.None,
+				routeOut: Blackprint.CodeRoute.None,
+			};
+		}
+	}
 }
 Blackprint.registerCode('BP/Var/Get', BPVarGet);
 
 class BPVarSet extends Blackprint.Code {
 	static routeIn = Blackprint.CodeRoute.MustHave;
 	static routeOut = Blackprint.CodeRoute.MustHave;
+
+	static routeRules(iface){
+		if(iface.input.Val.type === Blackprint.Types.Trigger){
+			return {
+				routeIn: Blackprint.CodeRoute.None,
+				routeOut: Blackprint.CodeRoute.None,
+			};
+		}
+	}
 }
 Blackprint.registerCode('BP/Var/Set', BPVarSet);
 
@@ -43,6 +61,15 @@ Blackprint.registerCode('BP/Fn/Input', BPFnInput);
 class BPFnVarOutput extends Blackprint.Code {
 	static routeIn = Blackprint.CodeRoute.MustHave;
 	static routeOut = Blackprint.CodeRoute.Optional;
+
+	static routeRules(iface){
+		if(iface.output.Val.type === Blackprint.Types.Trigger){
+			return {
+				routeIn: Blackprint.CodeRoute.None,
+				routeOut: Blackprint.CodeRoute.None,
+			};
+		}
+	}
 }
 Blackprint.registerCode('BP/FnVar/Output', BPFnVarOutput);
 

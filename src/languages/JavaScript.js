@@ -58,6 +58,11 @@ Blackprint.Code.registerHandler({
 				type: Blackprint.CodeType.NotWrapped,
 				name: name,
 				code: `bp_var${data.scope}["${name}"] = Input.Val;`,
+
+				// If the input is Trigger type
+				input: {
+					Val: `bp_var${data.scope}["${name}"]();`,
+				}
 			};
 		},
 
@@ -93,7 +98,7 @@ Blackprint.Code.registerHandler({
 					for (let key in input) {
 						let port = input[key];
 						let cables = port.cables;
-						if(cables.length === 0 || port.type === Function)
+						if(cables.length === 0 || port.type === Blackprint.Types.Trigger)
 							continue;
 
 						let key_ = jsProp(key);
@@ -146,6 +151,11 @@ Blackprint.Code.registerHandler({
 				type: Blackprint.CodeType.NotWrapped,
 				name: name,
 				code: `BpFnOutput["${data.name}"] = Input.Val;`,
+
+				// If the input is Trigger type
+				input: {
+					Val: `BpFnOutput["${data.name}"]?.();`,
+				}
 			};
 		},
 		functionVarInput(routes){
@@ -317,7 +327,7 @@ Blackprint.Code.registerHandler({
 					targets.push({index: targetIndex, prop: propAccessName, iface: inp.iface});
 				}
 
-				if(port.type !== Function){
+				if(port.type !== Blackprint.Types.Trigger){
 					if(port.isRoute){
 						let cables = port.cables;
 						let targetIface;
@@ -564,7 +574,7 @@ Available Events: \n${exports}
 					let temp = v.iface.output;
 					for (let key in temp) {
 						let port = temp[key];
-						if(port.type !== Function) continue;
+						if(port.type !== Blackprint.Types.Trigger) continue;
 						if(v.iface.namespace === 'BP/FnVar/Input')
 							key = v.iface.data.name;
 
