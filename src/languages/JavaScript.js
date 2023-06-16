@@ -39,10 +39,23 @@ Blackprint.Code.registerHandler({
 			let data = this.iface.data;
 			let name = data.name;
 
+			let init = '';
+			let codeType = Blackprint.CodeType.NotWrapped;
+			if(this.iface.output.Val.type === Blackprint.Types.Trigger){
+				let targets = this.iface.output.Val.cables.map(v => {
+					let input = v.input;
+					if(!input) return false;
+
+					return `bp_input_${input.iface.i}.${input.name}(bp_input_${input.iface.i}, bp_output_${input.iface.i})`;
+				}).filter(v => !!v);
+				
+				init = `bp_var${data.scope}["${name}"].push(() => { ${targets.join('; ')} });`;
+				codeType = Blackprint.CodeType.Init;
+			}
+
 			return {
-				type: Blackprint.CodeType.NotWrapped,
-				name: name,
-				code: ``,
+				type: codeType,
+				name: name, code: '', init,
 				outputAlias: {
 					Val: `bp_var${data.scope}["${name}"]`
 				},
@@ -54,14 +67,20 @@ Blackprint.Code.registerHandler({
 			let data = this.iface.data;
 			let name = data.name;
 
+			let code = '';
+			let inputAlias = {};
+			if(this.iface.input.Val.type === Blackprint.Types.Trigger){
+				inputAlias.Val = `bp_callVars(bp_var${data.scope}["${name}"]);`;
+			}
+			else code = `bp_var${data.scope}["${name}"] = Input.Val;`;
+
 			return {
 				type: Blackprint.CodeType.NotWrapped,
-				name: name,
-				code: `bp_var${data.scope}["${name}"] = Input.Val;`,
+				name: name, code, inputAlias,
 
 				// If the input is Trigger type
 				input: {
-					Val: `bp_var${data.scope}["${name}"]();`,
+					Val: `bp_callVars(bp_var${data.scope}["${name}"]);`,
 				}
 			};
 		},
@@ -147,10 +166,15 @@ Blackprint.Code.registerHandler({
 			let name = this.iface.namespace;
 			let data = this.iface.data;
 
+			let code = '';
+			if(this.iface.input.Val.type === Blackprint.Types.Trigger){
+				code = `/* ToDo FnVarOut */`;
+			}
+			else code = `BpFnOutput["${data.name}"] = Input.Val;`
+
 			return {
 				type: Blackprint.CodeType.NotWrapped,
-				name: name,
-				code: `BpFnOutput["${data.name}"] = Input.Val;`,
+				name: name, code,
 
 				// If the input is Trigger type
 				input: {
@@ -165,10 +189,14 @@ Blackprint.Code.registerHandler({
 			let proxyIface = instance.getNodes('BP/Fn/Input')[0].iface;
 			let proxyIndex = instance.ifaceList.indexOf(proxyIface);
 
+			let code = '';
+			if(this.iface.output.Val.type === Blackprint.Types.Trigger){
+				code = `/* ToDo FnVarIn */`;
+			}
+
 			return {
 				type: Blackprint.CodeType.NotWrapped,
-				name: name,
-				code: ``,
+				name: name, code,
 				outputAlias: {
 					Val: `bp_output_${proxyIndex}["${data.name}"]`
 				},
@@ -257,8 +285,13 @@ Blackprint.Code.registerHandler({
 				}
 
 				if(template.inputAlias?.[key] != null){
-					inputs.push(`set ${portName}(v){ ${template.inputAlias[key]} = v }`);
-					inputs.push(`get ${portName}(){ return ${template.inputAlias[key]} }`);
+					if(port.type === Blackprint.Types.Trigger){
+						inputs.push(`${portName}(v){ ${template.inputAlias[key]} }`);
+					}
+					else {
+						inputs.push(`set ${portName}(v){ ${template.inputAlias[key]} = v }`);
+						inputs.push(`get ${portName}(){ return ${template.inputAlias[key]} }`);
+					}
 				}
 				else if(port.feature === Blackprint.Port.ArrayOf){
 					inputs.push(`get ${portName}(){ return [${targets.map(v => `bp_output_${v.index}${v.prop}`).join(',')}] }`);
@@ -342,7 +375,13 @@ Blackprint.Code.registerHandler({
 							continue;
 						}
 
-						outputs.push(`get ${portName}(){ return bp_route_${routeIndex}_${outRoutes[key]}; }`);
+						// Is not empty route
+						if(outRoutes[key] != null){
+							outputs.push(`get ${portName}(){ return bp_route_${routeIndex}_${outRoutes[key]}; }`);
+							continue;
+						}
+
+						outputs.push(`${portName}(){ /* Empty */ }`);
 						continue;
 					}
 
@@ -364,6 +403,7 @@ Blackprint.Code.registerHandler({
 				}
 				else {
 					let temp = targets.map(v => {
+						if(v.alias) return v.alias;
 						if(v.iface.namespace === 'BP/Fn/Output' || v.iface.namespace === 'BP/FnVar/Output'){
 							return `BpFnOutput[${JSON.stringify(key)}]?.();`;
 						}
@@ -432,6 +472,10 @@ Blackprint.Code.registerHandler({
 			sharedData.nodeCodeNotWrapped ??= new Map();
 			sharedData.nodeCodeNotWrapped.set(functionName+ifaceIndex, data.code);
 		}
+		else if(data.type === Blackprint.CodeType.Init){
+			sharedData.nodeCodeInit ??= new Map();
+			sharedData.nodeCodeInit.set(functionName+ifaceIndex, data.init);
+		}
 		// Default
 		else result.code = `${prefix}function ${flatFunctionName}(Input, Output){ ${data.code} }`;
 
@@ -464,6 +508,8 @@ Blackprint.Code.registerHandler({
 				if(code.trim()) result.codes.push(code);
 				return;
 			}
+
+			if(sharedData.nodeCodeInit?.has(functionName+ifaceIndex)) return;
 
 			result.codes.push(`${prefix}${funcInstanceName}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex});`.replace(/^			/gm, ''));
 		}
@@ -528,19 +574,28 @@ Available Events: \n${exports}
 */
 
 ;let bp_var0 = {}; let bp_svar2 = {}; let bp_func = {};
+;function bp_callVars(list){ for(let i=0; i < list.length; i++) list[i](); }
 `;
 
+		for (let [key, val] of sharedData.nodeCodeInit)
+			body += '\n\t' + val;
+
 		if(sharedData.exportName === false){
-			// Private Vars
 			let variabels = [];
-			// let list2 = Blackprint.Code.utils.getFlatNamespace(sharedData.instance.variables);
-			// for (let key in list2)
-			// 	variabels.push(`bp_var1["${key}"] = null;`);
+
+			// Private Vars
+			let list2 = Blackprint.Code.utils.getFlatNamespace(sharedData.instance.variables);
+			for (let key in list2){
+				if(list2[key].type === Blackprint.Types.Trigger)
+					variabels.push(`bp_var1[${JSON.stringify(key)}] = [];`);
+			}
 
 			// Shared Vars
-			// let list3 = Blackprint.Code.utils.getFlatNamespace(sharedData.instance.sharedVariables);
-			// for (let key in list3)
-			// 	variabels.push(`bp_var2["${key}"] = null;`);
+			let list3 = Blackprint.Code.utils.getFlatNamespace(sharedData.instance.sharedVariables);
+			for (let key in list3){
+				if(list3[key].type === Blackprint.Types.Trigger)
+					variabels.push(`bp_var2[${JSON.stringify(key)}] = [];`);
+			}
 
 			if(variabels.length === 0) variabels = '';
 			else variabels = '\n' + variabels.join('\n');
@@ -548,11 +603,14 @@ Available Events: \n${exports}
 			return `\n\tlet bp_var1 = {};` + variabels + inits + '\n\n\t' + body + '\n';
 		}
 		else {
-			// Public Vars
 			let variabels = [];
+
+			// Public Vars
 			let list2 = Blackprint.Code.utils.getFlatNamespace(sharedData.instance.variables);
-			for (let key in list2)
-				variabels.push(`bp_var0["${key}"] = null;`);
+			for (let key in list2){
+				if(list2[key].type === Blackprint.Types.Trigger)
+					variabels.push(`bp_var0[${JSON.stringify(key)}] = [];`);
+			}
 
 			variabels = '\n' + variabels.join('\n');
 
