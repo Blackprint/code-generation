@@ -219,7 +219,7 @@ async function fromNode(iface, language, sharedData, stopUntil, routeIndex){
 	let iface_ = iface;
 	while(iface_ != null){
 		routeList.push(iface_);
-		iface_ = iface_.node.routes.out?.input.iface;
+		iface_ = iface_.node.routes.out?.input?.iface;
 		if(stopUntil == iface_) break;
 	}
 
@@ -264,7 +264,7 @@ async function fromNode(iface, language, sharedData, stopUntil, routeIndex){
 			let fnName = iface_.namespace;
 
 			let ifaceIndex = ifaceList.indexOf(iface_);
-			routes.routeOut = iface_.node.routes.out?.input.iface;
+			routes.routeOut = iface_.node.routes.out?.input?.iface;
 
 			let temp = sharedData.template.get(iface_);
 			let shared = sharedData.nodeCode[namespace] ??= [];
