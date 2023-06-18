@@ -368,7 +368,7 @@ Blackprint.Code.utils.createDummyFunction = async function(namespace, instance){
 	dummy.variables = instance.variables;
 	let iface = await dummy.createNode("BPI/F/"+namespace, {data: {pause: true}});
 
-	await new Promise(resolve => setTimeout(resolve, 1));
+	await new Promise(resolve => setTimeout(resolve, 50));
 	if(iface.bpInstance.ifaceList.length === 0) throw "Failed to import function instance on paused engine";
 
 	return { iface, instance: dummy };
