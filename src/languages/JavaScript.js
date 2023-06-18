@@ -286,7 +286,7 @@ Blackprint.Code.registerHandler({
 
 				if(template.inputAlias?.[key] != null){
 					if(port.type === Blackprint.Types.Trigger){
-						inputs.push(`${portName}(v){ ${template.inputAlias[key]} }`);
+						inputs.push(`async ${portName}(v){ ${template.inputAlias[key]} }`);
 					}
 					else {
 						inputs.push(`set ${portName}(v){ ${template.inputAlias[key]} = v }`);
@@ -316,7 +316,7 @@ Blackprint.Code.registerHandler({
 						if(def == null)
 							throw new Error(`${iface.namespace}: Trigger callback haven't been registered for input port "${key}"`);
 
-						inputs.push(`${portName}(Input, Output){ ${def} }`);
+						inputs.push(`async ${portName}(Input, Output){ ${def} }`);
 						continue;
 					}
 					else if(feature === Blackprint.Port.ArrayOf) def = [];
@@ -405,17 +405,17 @@ Blackprint.Code.registerHandler({
 					let temp = targets.map(v => {
 						if(v.alias) return v.alias;
 						if(v.iface.namespace === 'BP/Fn/Output' || v.iface.namespace === 'BP/FnVar/Output'){
-							return `BpFnOutput[${JSON.stringify(key)}]?.();`;
+							return `await BpFnOutput[${JSON.stringify(key)}]?.();`;
 						}
 
 						if(v.iface.namespace === 'BP/Var/Set'){
 							return `/* ToDo */`;
 						}
 
-						return `bp_input_${v.index + v.prop}(bp_input_${v.index}, bp_output_${v.index})`;
+						return `await bp_input_${v.index + v.prop}(bp_input_${v.index}, bp_output_${v.index})`;
 					});
 
-					outputs.push(`${portName}(){ ${temp.join('; ')} }`.replace(/^					/gm, ''));
+					outputs.push(`async ${portName}(){ ${temp.join('; ')} }`.replace(/^					/gm, ''));
 				}
 			}
 		}
