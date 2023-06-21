@@ -2,7 +2,8 @@ Blackprint.Code.registerHandler({
 	languageName: 'Python',
 	languageId: 'python',
 
-	routeFunction: `def bp_route_{{+bp current_route_name }}():\n\t{{+bp wrap_code_here }}`,
+	routeFunction: `def {{+bp current_route_name }}():\n\t{{+bp wrap_code_here }}`,
+	routeFunctionName: `bp_route_{{+bp index }}`,
 	routeFillEmpty: `pass # Empty route`,
 
 	internalNodes: {
@@ -38,10 +39,23 @@ Blackprint.Code.registerHandler({
 			let data = this.iface.data;
 			let name = data.name;
 
+			let init = '';
+			let codeType = Blackprint.CodeType.NotWrapped;
+			if(this.iface.output.Val.type === Blackprint.Types.Trigger){
+				let targets = this.iface.output.Val.cables.map(v => {
+					let input = v.input;
+					if(!input) return false;
+
+					return `bp_input_${input.iface.i}[${JSON.stringify(input.name)}]()`;
+				}).filter(v => !!v);
+
+				init = `bp_var${data.scope}["${name}"].append(lambda: (${targets.join(', ')}))`;
+				codeType = Blackprint.CodeType.Init;
+			}
+
 			return {
-				type: Blackprint.CodeType.NotWrapped,
-				name: name,
-				code: ``,
+				type: codeType,
+				name: name, code: '', init,
 				outputAlias: {
 					Val: `bp_var${data.scope}[${JSON.stringify(name)}]`,
 				},
@@ -53,10 +67,21 @@ Blackprint.Code.registerHandler({
 			let data = this.iface.data;
 			let name = data.name;
 
+			let code = '';
+			let inputAlias = {};
+			if(this.iface.input.Val.type === Blackprint.Types.Trigger){
+				inputAlias.Val = `bp_callVars(bp_var${data.scope}["${name}"])`;
+			}
+			else code = `bp_var${data.scope}[${JSON.stringify(name)}] = Input["Val"]`;
+
 			return {
 				type: Blackprint.CodeType.NotWrapped,
-				name: name,
-				code: `bp_var${data.scope}[${JSON.stringify(name)}] = Input["Val"]`,
+				name: name, code, inputAlias,
+
+				// If the input is Trigger type
+				input: {
+					Val: `bp_callVars(bp_var${data.scope}["${name}"])`,
+				}
 			};
 		},
 
@@ -68,7 +93,7 @@ Blackprint.Code.registerHandler({
 			return {
 				type: Blackprint.CodeType.NotWrapped,
 				name: name,
-				code: `bp_func_${ifaceIndex}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex})`,
+				code: `bp_func_${ifaceIndex}["call"](bp_input_${ifaceIndex}, bp_output_${ifaceIndex})`,
 			};
 		},
 
@@ -91,7 +116,8 @@ Blackprint.Code.registerHandler({
 					for (let key in input) {
 						let port = input[key];
 						let cables = port.cables;
-						if(cables.length === 0) continue;
+						if(cables.length === 0 || port.type === Blackprint.Types.Trigger)
+							continue;
 
 						let key_ = `[${JSON.stringify(key)}]`;
 						if(port.feature === Blackprint.Port.ArrayOf){
@@ -138,10 +164,20 @@ Blackprint.Code.registerHandler({
 			let name = this.iface.namespace;
 			let data = this.iface.data;
 
+			let code = '';
+			if(this.iface.input.Val.type === Blackprint.Types.Trigger){
+				code = `/* ToDo FnVarOut */`;
+			}
+			else code = `BpFnOutput["${data.name}"] = Input["Val"]`
+
 			return {
 				type: Blackprint.CodeType.NotWrapped,
-				name: name,
-				code: `BpFnOutput["${data.name}"] = Input["Val"]`,
+				name: name, code,
+
+				// If the input is Trigger type
+				input: {
+					Val: `BpFnOutput["${data.name}"]() if BpFnOutput["${data.name}"] != None else None`,
+				}
 			};
 		},
 		functionVarInput(routes){
@@ -151,10 +187,14 @@ Blackprint.Code.registerHandler({
 			let proxyIface = instance.getNodes('BP/Fn/Input')[0].iface;
 			let proxyIndex = instance.ifaceList.indexOf(proxyIface);
 
+			let code = '';
+			if(this.iface.output.Val.type === Blackprint.Types.Trigger){
+				code = `/* ToDo FnVarIn */`;
+			}
+
 			return {
 				type: Blackprint.CodeType.NotWrapped,
-				name: name,
-				code: ``,
+				name: name, code,
 				outputAlias: {
 					Val: `bp_output_${proxyIndex}["${data.name}"]`
 				},
@@ -201,6 +241,10 @@ Blackprint.Code.registerHandler({
 		},
 	},
 
+	createRouteCall({ routeIndex }){
+		return this.routeFunctionName.replace('{{+bp index }}', routeIndex) + '()';
+	},
+
 	generatePortsStorage({ iface, ifaceIndex, ifaceList, variabels, sharedData, routeIndex, outRoutes }){
 		let inputs = [], outputs = [];
 		let inputAlias = false, outputAlias = false;
@@ -213,7 +257,8 @@ Blackprint.Code.registerHandler({
 		let inputFunc = [];
 		if(IInput != null){
 			for (let key in IInput) {
-				let {default: def, feature, cables} = IInput[key];
+				let port = IInput[key];
+				let {default: def, cables} = port;
 				let portName = JSON.stringify(key);
 				let portNameFlat = key.replace(/\W/g, '_');
 
@@ -235,11 +280,15 @@ Blackprint.Code.registerHandler({
 				}
 
 				if(template.inputAlias?.[key] != null){
-					let setter = `bp_input_${ifaceIndex}_${portNameFlat}`;
-					inputFunc.push(`def ${setter}(v): ${template.inputAlias[key]} = v`);
-					inputs.push(`${portName}: [lambda: ${template.inputAlias[key]}, lambda v: ${setter}(v)]`);
+					if(port.type === Blackprint.Types.Trigger){
+						inputs.push(`${portName}: [lambda: ${template.inputAlias[key]}]`);
+					}
+					else {
+						inputs.push(`set ${portName}(v){ ${template.inputAlias[key]} = v }`);
+						inputs.push(`get ${portName}(){ return ${template.inputAlias[key]} }`);
+					}
 				}
-				else if(feature === Blackprint.Port.ArrayOf){
+				else if(port.feature === Blackprint.Port.ArrayOf){
 					inputs.push(`${portName}: [lambda: [${targets.map(v => `bp_output_${v.index}${v.prop}`).join(',')}]]`);
 				}
 				else if(def == null){
@@ -252,16 +301,20 @@ Blackprint.Code.registerHandler({
 				}
 				else {
 					let typed = typeof def;
-					let feature = IInput[key].feature;
+					let feature = port.feature;
 
 					if(feature === Blackprint.Port.Trigger){
 						def = template.input?.[key];
+						if(iface.namespace.startsWith('BPI/F/'))
+							def = `bp_func_${ifaceIndex}["input"][${JSON.stringify(key)}]()`;
+
 						if(def == null)
 							throw new Error(`${iface.namespace}: Trigger callback haven't been registered for input port "${key}"`);
 						
-						inputFunc.push(`def inp_f_${portNameFlat}(Input, Output):\n\t${def}\ndef c_inp_f_${portNameFlat}(): inp_f_${portNameFlat}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex})`);
+						let inpFuncName = `inp_f_${portNameFlat}${ifaceIndex}`;
+						inputFunc.push(`def ${inpFuncName}(Input, Output):\n\t${def}\ndef c_${inpFuncName}(): ${inpFuncName}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex})`);
 
-						inputs.push(`${portName}: [lambda: c_inp_f_${portNameFlat}]`);
+						inputs.push(`${portName}: [lambda: c_${inpFuncName}]`);
 						continue;
 					}
 					else if(feature === Blackprint.Port.ArrayOf) def = [];
@@ -286,7 +339,7 @@ Blackprint.Code.registerHandler({
 		}
 
 		let outputFunc = [];
-		if(IOutput != null && iface.namespace !== 'BP/Fn/Input'){
+		if(IOutput != null && !template.outputAlias){
 			// let portIndex = 0;
 			for (let key in IOutput) {
 				let portName = JSON.stringify(key);
@@ -309,12 +362,31 @@ Blackprint.Code.registerHandler({
 					let propAccessName = JSON.stringify(inp.name);
 					propAccessName = `[${propAccessName}]`;
 
-					targets.push({index: targetIndex, prop: propAccessName});
+					targets.push({index: targetIndex, prop: propAccessName, iface: inp.iface});
 				}
 
-				if(port.type !== Function){
+				if(port.type !== Blackprint.Types.Trigger){
 					if(port.isRoute){
-						outputs.push(`${portName}: [lambda: bp_route_${routeIndex}_${outRoutes[key]}]`);
+						let cables = port.cables;
+						let targetIface;
+						for (let i=0; i < cables.length; i++) {
+							targetIface = cables[i].input?.iface;
+							if(targetIface != null) break;
+						}
+
+						if(targetIface && sharedData.routeIndexes.has(targetIface)){
+							let routeIndex_ = sharedData.routeIndexes.get(targetIface);
+							outputs.push(`${portName}: [lambda: bp_route_${routeIndex_}]`);
+							continue;
+						}
+
+						// Is not empty route
+						if(outRoutes[key] != null){
+							outputs.push(`${portName}: [lambda: bp_route_${routeIndex}_${outRoutes[key]}]`);
+							continue;
+						}
+
+						outputs.push(`${portName}: [lambda: bp__NOOP]`);
 						continue;
 					}
 
@@ -338,9 +410,22 @@ Blackprint.Code.registerHandler({
 					outputs.push(`${portName}: [lambda: ${getter}, lambda v: ${setter}(v)]`);
 				}
 				else {
-					let temp = targets.map(v => `bp_input_${v.index}${v.prop}()`);
-					outputFunc.push(`def out_f_${portNameFlat}():\n\t${temp.join('\n\t')}`);
-					outputs.push(`${portName}: [lambda: out_f_${portNameFlat}]`.replace(/^					/gm, ''));
+					let temp = targets.map(v => {
+						if(v.alias) return v.alias;
+						if(v.iface.namespace === 'BP/Fn/Output' || v.iface.namespace === 'BP/FnVar/Output'){
+							return `BpFnOutput[${JSON.stringify(key)}]() if BpFnOutput[${JSON.stringify(key)}] != None else None`;
+						}
+
+						if(v.iface.namespace === 'BP/Var/Set'){
+							return `/* ToDo */`;
+						}
+
+						return `bp_input_${v.index + v.prop}()`;
+					});
+
+					let outFuncName = `out_f_${portNameFlat}${ifaceIndex}`;
+					outputFunc.push(`def ${outFuncName}():\n\t${temp.join('\n\t')}`);
+					outputs.push(`${portName}: [lambda: ${outFuncName}]`.replace(/^					/gm, ''));
 				}
 			}
 		}
@@ -380,6 +465,9 @@ Blackprint.Code.registerHandler({
 				fnInstance = `\nbp_func_${ifaceIndex} = bp_func["${functionName}"]()`;
 			}
 
+			if(output == '') outputFunc = '';
+			if(input == '') inputFunc = '';
+
 			if(inputAlias || outputAlias || inputs.length || outputs.length)
 				variabels.set(ifaceIndex, `${inputFunc}${outputFunc}${input}${output}${fnInstance}`);
 		}
@@ -414,6 +502,10 @@ Blackprint.Code.registerHandler({
 			sharedData.nodeCodeNotWrapped ??= new Map();
 			sharedData.nodeCodeNotWrapped.set(functionName+ifaceIndex, data.code);
 		}
+		else if(data.type === Blackprint.CodeType.Init){
+			sharedData.nodeCodeInit ??= new Map();
+			sharedData.nodeCodeInit.set(functionName+ifaceIndex, data.init);
+		}
 		// Default
 		else result.code = `def ${flatFunctionName}(Input, Output): \n\t${data.code}`;
 
@@ -431,7 +523,7 @@ Blackprint.Code.registerHandler({
 	}){
 		let funcInstanceName = functionName.replace(/\W/g, '_');
 		if(functionName.startsWith('BPI/F/'))
-			funcInstanceName = `bp_func_${ifaceIndex}`;
+			funcInstanceName = `bp_func_${ifaceIndex}["call"]`;
 
 		let prefix = `${codeClass.isReturn ? 'return ' : ''}`;
 		if(selfRun){
@@ -446,12 +538,14 @@ Blackprint.Code.registerHandler({
 				return;
 			}
 
+			if(sharedData.nodeCodeInit?.has(functionName+ifaceIndex)) return;
+
 			result.codes.push(`${prefix}${funcInstanceName}(bp_input_${ifaceIndex}, bp_output_${ifaceIndex})`.replace(/^			/gm, ''));
 		}
 	},
 
 	// You can wrap the generated code from here
-	finalCodeResult(exportName, sharedData, entryPoints){
+	async finalCodeResult(exportName, sharedData, entryPoints){
 		if(/(^[^a-zA-Z]|\W)/m.test(exportName)) throw new Error("Export name is a invalid variable name for Python");
 
 		let inits = ``;
@@ -515,32 +609,57 @@ Blackprint.Code.registerHandler({
 # 
 
 ${imports.join('\n')}
-bp_var0 = {}; bp_svar2 = {}; bp_func = {}
+bp_var0 = {}; bp_svar2 = {}; bp_func = {};
+def bp_callVars(list):\n\tfor x in list: x()
+def bp__NOOP(): pass
 `;
+		for (let [key, val] of sharedData.nodeCodeInit)
+			body += '\n\t' + val;
+
+		function defaultVal(type){
+			if(type === Boolean) return 'False';
+			if(type === Number) return '0';
+			if(type === String) return '""';
+			return 'None';
+		}
 
 		if(sharedData.exportName === false){
-			// Private Vars
 			let variabels = [];
-			// let list2 = Blackprint.Code.utils.getFlatNamespace(sharedData.instance.variables);
-			// for (let key in list2)
-			// 	variabels.push(`bp_var1["${key}"] = None`);
+
+			// Private Vars
+			let list2 = Blackprint.Code.utils.getFlatNamespace(sharedData.instance.variables);
+			for (let key in list2){
+				let type = list2[key].type;
+				if(type === Blackprint.Types.Trigger)
+					variabels.push(`bp_var1[${JSON.stringify(key)}] = []`);
+				else variabels.push(`bp_var1[${JSON.stringify(key)}] = ${defaultVal(type)}`);
+			}
 
 			// Shared Vars
-			// let list3 = Blackprint.Code.utils.getFlatNamespace(sharedData.instance.sharedVariables);
-			// for (let key in list3)
-			// 	variabels.push(`bp_var2["${key}"] = None`);
+			let list3 = Blackprint.Code.utils.getFlatNamespace(sharedData.instance.sharedVariables);
+			for (let key in list3){
+				let type = list3[key].type;
+				if(type === Blackprint.Types.Trigger)
+					variabels.push(`bp_var2[${JSON.stringify(key)}] = []`);
+				else variabels.push(`bp_var2[${JSON.stringify(key)}] = ${defaultVal(type)}`);
+			}
 
 			if(variabels.length === 0) variabels = '';
-			else variabels = '\n' + variabels.join('\n');
+			else variabels = '\n\t' + variabels.join('\n\t');
 
 			return `\n\tbp_var1 = {}` + variabels + inits + '\n\n\t' + body + '\n';
 		}
 		else {
-			// Public Vars
 			let variabels = [];
+
+			// Public Vars
 			let list2 = Blackprint.Code.utils.getFlatNamespace(sharedData.instance.variables);
-			for (let key in list2)
-				variabels.push(`bp_var0["${key}"] = None`);
+			for (let key in list2){
+				let type = list2[key].type;
+				if(type === Blackprint.Types.Trigger)
+					variabels.push(`bp_var0[${JSON.stringify(key)}] = []`);
+				else variabels.push(`bp_var0[${JSON.stringify(key)}] = ${defaultVal(type)}`);
+			}
 
 			variabels = '\n' + variabels.join('\n');
 
@@ -548,11 +667,60 @@ bp_var0 = {}; bp_svar2 = {}; bp_func = {}
 			let functions = [];
 			let list1 = Blackprint.Code.utils.getFlatNamespace(sharedData.instance.functions);
 			for (let key in list1) {
-				let temp = new Blackprint.Skeleton(list1[key].structure);
-				let codeTemp = Blackprint.Code.generateFrom(temp.ifaceList[0], 'python', false, sharedData);
-				let flatFunctionName = key.replace(/\W/g, '_');
+				let temp = await Blackprint.Code.utils.createDummyFunction(key, sharedData.instance);
+				let bpInstance = temp.iface.bpInstance;
 
-				functions.push(`bp_svar2["${key}"] = {}\ndef bpf_${flatFunctionName}():\n\tBpFnOutput = {}\n\tbp_var2 = bp_svar2["${key}"]${codeTemp}\n\tdef bp_instanceCall_(BpFnInput, _BpFnOutput={}):\n\t\tnonlocal BpFnOutput, ${sharedData.fnOutputVar}\n\t\tBpFnOutput = _BpFnOutput\n\t\t${sharedData.fnOutputVar} = BpFnInput\n\t\tbp_route_0_0()\n\t\treturn BpFnOutput\n\treturn bp_instanceCall_\nbp_func["${key}"] = bpf_${flatFunctionName}`);
+				let fnInput = bpInstance.getNodes('BP/Fn/Input')[0];
+				let fnInputCallables = {};
+				let fnInputVar = {};
+
+				sharedData.functionTemplate = list1[key];
+				let codeTemp = await Blackprint.Code.generateFrom(fnInput.iface, 'python', false, sharedData);
+				sharedData.functionTemplate = null;
+
+				[fnInput, ...bpInstance.getNodes('BP/FnVar/Input')].forEach(v => {
+					let temp = v.iface.output;
+					for (let key in temp) {
+						let port = temp[key];
+						if(port.type !== Blackprint.Types.Trigger) {
+							fnInputVar[key] ??= true;
+							return;
+						}
+
+						if(v.iface.namespace === 'BP/FnVar/Input')
+							key = v.iface.data.name;
+
+						let cables = port.cables;
+						let codes = fnInputCallables[key] ??= [];
+						for (let i=0; i < cables.length; i++) {
+							let cable = cables[i];
+							if(cable.input == null) continue;
+
+							let portName = JSON.stringify(cable.input.name);
+							let targetIndex = bpInstance.ifaceList.indexOf(cable.input.iface);
+							codes.push(`bp_input_${targetIndex}[${portName}]()`);
+						}
+					}
+				});
+
+				fnInputCallables = Object.entries(fnInputCallables).map(([key, value]) => {
+					if(/(^[^a-zA-Z]|\W)/m.test(key)) key = JSON.stringify(key);
+					return `"${key}": lambda: (${value.join(', ')})`
+				}).join(', ');
+
+				fnInputVar = Object.entries(fnInputVar).map(([key, value]) => {
+					return `${JSON.stringify(key)}: None`;
+				}).join(', ');
+
+				let fnOutputVar = Object.keys(bpInstance.getNodes('BP/Fn/Output')[0].input).map(v => {
+					return `${JSON.stringify(v)}: None`;
+				}).join(', ');
+
+				// Destroy instance and delete nodes
+				temp.instance.destroy();
+
+				let flatFunctionName = key.replace(/\W/g, '_');
+				functions.push(`bp_svar2["${key}"] = {}\ndef bpf_${flatFunctionName}():\n\tBpFnOutput = {}\n\tbp_var2 = bp_svar2["${key}"]${codeTemp}\n\tbp_input = { ${[fnInputCallables, fnInputVar].join(', ')} }; bp_output = BpFnOutput = { ${fnOutputVar} }\n\tdef bp_instanceCall_(BpFnInput=bp_input, _BpFnOutput=bp_output):\n\t\tnonlocal BpFnOutput, ${sharedData.fnOutputVar}\n\t\tBpFnOutput = _BpFnOutput\n\t\t${sharedData.fnOutputVar} = BpFnInput\n\t\tbp_route_0_0()\n\t\treturn BpFnOutput\n\treturn {"input": bp_input, "output": bp_output, "call": bp_instanceCall_}\nbp_func["${key}"] = bpf_${flatFunctionName}`);
 			}
 
 			functions = '\n' + functions.join('\n');
