@@ -613,8 +613,11 @@ bp_var0 = {}; bp_svar2 = {}; bp_func = {};
 def bp_callVars(list):\n\tfor x in list: x()
 def bp__NOOP(): pass
 `;
-		for (let [key, val] of sharedData.nodeCodeInit)
-			body += '\n\t' + val;
+
+		if(sharedData.nodeCodeInit != null){
+			for (let [key, val] of sharedData.nodeCodeInit)
+				body += '\n\t' + val;
+		}
 
 		function defaultVal(type){
 			if(type === Boolean) return 'False';

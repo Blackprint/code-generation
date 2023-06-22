@@ -577,8 +577,10 @@ Available Events: \n${exports}
 ;function bp_callVars(list){ for(let i=0; i < list.length; i++) list[i](); }
 `;
 
-		for (let [key, val] of sharedData.nodeCodeInit)
-			body += '\n\t' + val;
+		if(sharedData.nodeCodeInit != null){
+			for (let [key, val] of sharedData.nodeCodeInit)
+				body += '\n\t' + val;
+		}
 
 		if(sharedData.exportName === false){
 			let variabels = [];
@@ -658,7 +660,7 @@ Available Events: \n${exports}
 					return `${key}(){ ${value.join('; ')} }`
 				}).join(', ');
 
-				functions.push(`bp_svar2["${key}"] = {}; bp_func["${key}"] = function(){\n\tlet BpFnOutput = {};\n\tlet bp_var2 = bp_svar2["${key}"];${codeTemp}\n\tlet bp_input = { ${fnInputCallables} };let bp_output = {};\n\treturn {\n\t\tinput: bp_input,\n\t\toutput: bp_output,\n\t\tcall: async function(BpFnInput=bp_input, _BpFnOutput=bp_output){\n\t\t\tBpFnOutput = _BpFnOutput;\n\t\t\t${sharedData.fnOutputVar} = BpFnInput;\n\t\t\tbp_route_0_0();\n\t\t\treturn BpFnOutput;\n\t\t}\n\t}\n}`);
+				functions.push(`bp_svar2["${key}"] = {}; bp_func["${key}"] = function(){\n\tlet BpFnOutput = {};\n\tlet bp_var2 = bp_svar2["${key}"];${codeTemp}\n\tlet bp_input = { ${fnInputCallables} };let bp_output = BpFnOutput = {};\n\treturn {\n\t\tinput: bp_input,\n\t\toutput: bp_output,\n\t\tcall: async function(BpFnInput=bp_input, _BpFnOutput=bp_output){\n\t\t\tBpFnOutput = _BpFnOutput;\n\t\t\t${sharedData.fnOutputVar} = BpFnInput;\n\t\t\tbp_route_0_0();\n\t\t\treturn BpFnOutput;\n\t\t}\n\t}\n}`);
 			}
 			functions = '\n' + functions.join('\n');
 
