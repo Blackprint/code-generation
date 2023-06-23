@@ -454,6 +454,36 @@ Blackprint.Code.registerHandler({
 		let flatFunctionName = functionName.replace(/\W/g, '_');
 		let prefix = `${codeClass.isAsync ? 'async ' : ''}`;
 
+		if(data.module){
+			/* data.module = {
+				"@import/path" : "varAlias",
+			}*/
+
+			if(sharedData.moduleImports == null){
+				sharedData.moduleImportsCount = 0;
+				sharedData.moduleImports = {/*
+					"@import/path" : "bpim_1",
+				*/};
+			}
+
+			let cached = sharedData.moduleImports;
+			let modules = data.module;
+			for (let key in modules) {
+				let name = cached[key];
+
+				if(name == null)
+					name = cached[key] = `bpim_${sharedData.moduleImportsCount++}`;
+
+				let temp = modules[key];
+				if(temp.constructor === String){ // Name Alias
+					if(/\W/.test(temp))
+						throw new Error("Variable must be alphanumeric and underscore only");
+
+					dataCodeReplace(data, temp, name);
+				}
+			}
+		}
+
 		if(data.type === Blackprint.CodeType.Callback){
 			result.code = `${prefix}function ${flatFunctionName}(Input, Output, Route){\n\t${data.code.replace(/\n/g, '\n\t')}\n}`;
 			result.selfRun = data.selfRun;
@@ -565,7 +595,14 @@ Blackprint.Code.registerHandler({
 
 			exports += `- ${exportName}.on("${key}", ${params})\n \t=> ${temp.comment}`;
 		}
-		
+
+		let imports = [];
+		if(sharedData.moduleImports != null){
+			let temp = sharedData.moduleImports;
+			for (let key in temp)
+				imports.push(`let ${temp[key]} = await import(${JSON.stringify(key)});`);
+		}
+
 		let information = `/*
 This code is automatically generated with Blackprint
 
@@ -573,6 +610,7 @@ Available Events: \n${exports}
 
 */
 
+${imports.join('\n')}
 ;let bp_var0 = {}; let bp_svar2 = {}; let bp_func = {};
 ;function bp_callVars(list){ for(let i=0; i < list.length; i++) list[i](); }
 `;
@@ -674,4 +712,29 @@ function jsProp(name){
 	propAccessName = propAccessName.slice(0, 1) === '"' ? '['+propAccessName+']' : '.'+propAccessName;
 
 	return propAccessName;
+}
+
+function dataCodeReplace(data, name, to){
+	let regex = RegExp(`(?<=\\W)${name}(?=[\\.\\[])`, 'mg');
+	if(data.code != null) data.code = data.code.replace(regex, to);
+	if(data.begin != null) data.begin = data.begin.replace(regex, to);
+	if(data.end != null) data.end = data.end.replace(regex, to);
+	if(data.init != null) data.init = data.init.replace(regex, to);
+
+	if(data.input != null){
+		let obj = data.input;
+		for (let key in obj) obj[key] = obj[key].replace(regex, to);
+	}
+	if(data.inputAlias != null){
+		let obj = data.inputAlias;
+		for (let key in obj) obj[key] = obj[key].replace(regex, to);
+	}
+	if(data.output != null){
+		let obj = data.output;
+		for (let key in obj) obj[key] = obj[key].replace(regex, to);
+	}
+	if(data.outputAlias != null){
+		let obj = data.outputAlias;
+		for (let key in obj) obj[key] = obj[key].replace(regex, to);
+	}
 }

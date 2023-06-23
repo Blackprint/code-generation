@@ -477,6 +477,52 @@ Blackprint.Code.registerHandler({
 	onNodeCodeGenerated(result, { data, functionName, routes, iface, ifaceIndex, sharedData }){
 		let flatFunctionName = functionName.replace(/\W/g, '_');
 
+		if(data.module){
+			/* data.module = {
+				".module.path": "varAlias",
+				".module.path": { "importName": "varAlias" },
+			}*/
+
+			if(sharedData.moduleImports == null){
+				sharedData.moduleImportsCount = 0;
+				sharedData.moduleImports = {/*
+					".module.path": "bpim_1",
+				*/};
+				sharedData.moduleImportsMultiple = {/*
+					".module.path": { "importName": "bpim_1"},
+				*/};
+			}
+
+			let cached = sharedData.moduleImports;
+			let modules = data.module;
+			for (let key in modules) {
+				let temp = modules[key];
+				if(temp.constructor === String){ // Name Alias
+					if(/\W/.test(temp))
+						throw new Error("Variable must be alphanumeric and underscore only");
+
+					let name = cached[key];
+					if(name == null)
+						name = cached[key] = `bpim_${sharedData.moduleImportsCount++}`;
+
+					dataCodeReplace(data, temp, name);
+				}
+				else if(temp.constructor === Object){ // Multiple
+					let cached = sharedData.moduleImportsMultiple[key] ??= {};
+					for (let lv2 in temp) {
+						if(/\W/.test(temp[lv2]))
+							throw new Error("Variable must be alphanumeric and underscore only");
+
+						let name = cached[lv2];
+						if(name == null)
+							name = cached[lv2] = `bpim_${sharedData.moduleImportsCount++}`;
+
+						dataCodeReplace(data, temp[lv2], name);
+					}
+				}
+			}
+		}
+
 		if(data.type === Blackprint.CodeType.Callback){
 			result.code = `def ${flatFunctionName}(Input, Output, Route):\n\t${data.code.replace(/\n/g, '\n\t')}\n`;
 			result.selfRun = data.selfRun;
@@ -603,6 +649,19 @@ Blackprint.Code.registerHandler({
 		}
 
 		let imports = ['from BlackprintCodeHelper import bp_DataStorage_, bp_Instance_'];
+		if(sharedData.moduleImports != null){
+			let temp = sharedData.moduleImports;
+			for (let key in temp) imports.push(`import ${key} as ${temp[key]}`);
+		}
+
+		if(sharedData.moduleImportsMultiple != null){
+			let temp = sharedData.moduleImportsMultiple;
+			for (let key in temp){
+				let aliases = Object.entries(temp[key]).map(v => `${v[0]} as ${v[1]}`);
+				imports.push(`from ${key} import ${aliases.join(', ')}`);
+			}
+		}
+
 		let information = `# This code is automatically generated with Blackprint
 # 
 # Available Events: \n${exports}
@@ -732,3 +791,28 @@ def bp__NOOP(): pass
 		}
 	},
 });
+
+function dataCodeReplace(data, name, to){
+	let regex = RegExp(`(?<=\\W)${name}(?=[\\.\\[])`, 'mg');
+	if(data.code != null) data.code = data.code.replace(regex, to);
+	if(data.begin != null) data.begin = data.begin.replace(regex, to);
+	if(data.end != null) data.end = data.end.replace(regex, to);
+	if(data.init != null) data.init = data.init.replace(regex, to);
+
+	if(data.input != null){
+		let obj = data.input;
+		for (let key in obj) obj[key] = obj[key].replace(regex, to);
+	}
+	if(data.inputAlias != null){
+		let obj = data.inputAlias;
+		for (let key in obj) obj[key] = obj[key].replace(regex, to);
+	}
+	if(data.output != null){
+		let obj = data.output;
+		for (let key in obj) obj[key] = obj[key].replace(regex, to);
+	}
+	if(data.outputAlias != null){
+		let obj = data.outputAlias;
+		for (let key in obj) obj[key] = obj[key].replace(regex, to);
+	}
+}
