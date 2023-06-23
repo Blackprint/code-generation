@@ -597,7 +597,7 @@ Blackprint.Code.registerHandler({
 		let inits = ``;
 		if(sharedData.exportName !== false){
 			// inits += ``;
-			inits += `\n\n# Application module\n${exportName} = bp_Instance_({"Environment":{}})`;
+			inits += `\n\n# Application module\n${exportName} = bp_Instance_({"Environment":{}})\n${exportName}.Variables = bp_var0\n${exportName}.Functions = bp_func`;
 
 			inits += '\n\n# Node .update() functions\n' + ((Object.values(sharedData.nodeCode).join('\n').trim() || '# - This export has no shared function'));
 		}
