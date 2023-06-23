@@ -145,7 +145,7 @@ Blackprint.Code.registerHandler({
 							list.push(`BpFnOutput${key_} = ${append}`);
 						}
 
-						this.code = `# <-- FnOutput\n\t${list.join('; ')}`;
+						this.code = `# <-- FnOutput\n${list.join('; ')}`;
 					}
 				}
 			};
@@ -553,7 +553,7 @@ Blackprint.Code.registerHandler({
 			sharedData.nodeCodeInit.set(functionName+ifaceIndex, data.init);
 		}
 		// Default
-		else result.code = `def ${flatFunctionName}(Input, Output): \n\t${data.code}`;
+		else result.code = `def ${flatFunctionName}(Input, Output): \n\t${data.code.replace(/\n/g, '\n\t')}`;
 
 		if(iface.namespace === 'BP/Event/Listen'){
 			let exported = sharedData.exported ??= {};
@@ -577,7 +577,7 @@ Blackprint.Code.registerHandler({
 		}
 		else if(iface.type !== 'event'){
 			if(sharedData.nodeCodeNotWrapped?.has(functionName+ifaceIndex)){
-				let code = sharedData.nodeCodeNotWrapped.get(functionName+ifaceIndex).replace(/\bInput\b/gm, `bp_input_${ifaceIndex}`).replace(/\bOutput\b/gm, `bp_output_${ifaceIndex}`);
+				let code = sharedData.nodeCodeNotWrapped.get(functionName+ifaceIndex).replace(/\bInput\b/gm, `bp_input_${ifaceIndex}`).replace(/\bOutput\b/gm, `bp_output_${ifaceIndex}`).replace(/\n/g, '\n\t');
 
 				// Append only if not empty
 				if(code.trim()) result.codes.push(code);
@@ -675,7 +675,7 @@ def bp__NOOP(): pass
 
 		if(sharedData.nodeCodeInit != null){
 			for (let [key, val] of sharedData.nodeCodeInit)
-				body += '\n\t' + val;
+				body += '\n\t' + val.replace(/\n/g, '\n\t');
 		}
 
 		function defaultVal(type){
@@ -791,28 +791,3 @@ def bp__NOOP(): pass
 		}
 	},
 });
-
-function dataCodeReplace(data, name, to){
-	let regex = RegExp(`(?<=\\W)${name}(?=[\\.\\[])`, 'mg');
-	if(data.code != null) data.code = data.code.replace(regex, to);
-	if(data.begin != null) data.begin = data.begin.replace(regex, to);
-	if(data.end != null) data.end = data.end.replace(regex, to);
-	if(data.init != null) data.init = data.init.replace(regex, to);
-
-	if(data.input != null){
-		let obj = data.input;
-		for (let key in obj) obj[key] = obj[key].replace(regex, to);
-	}
-	if(data.inputAlias != null){
-		let obj = data.inputAlias;
-		for (let key in obj) obj[key] = obj[key].replace(regex, to);
-	}
-	if(data.output != null){
-		let obj = data.output;
-		for (let key in obj) obj[key] = obj[key].replace(regex, to);
-	}
-	if(data.outputAlias != null){
-		let obj = data.outputAlias;
-		for (let key in obj) obj[key] = obj[key].replace(regex, to);
-	}
-}

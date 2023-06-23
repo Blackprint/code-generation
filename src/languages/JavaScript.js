@@ -147,7 +147,7 @@ Blackprint.Code.registerHandler({
 							list.push(`BpFnOutput${key_} = ${append}`);
 						}
 
-						this.code = `// <-- FnOutput\n\t${list.join('; ')};`;
+						this.code = `// <-- FnOutput\n${list.join('; ')};`;
 					}
 				}
 			};
@@ -507,7 +507,7 @@ Blackprint.Code.registerHandler({
 			sharedData.nodeCodeInit.set(functionName+ifaceIndex, data.init);
 		}
 		// Default
-		else result.code = `${prefix}function ${flatFunctionName}(Input, Output){ ${data.code} }`;
+		else result.code = `${prefix}function ${flatFunctionName}(Input, Output){ ${data.code.replace(/\n/g, '\n\t')} }`;
 
 		if(iface.namespace === 'BP/Event/Listen'){
 			let exported = sharedData.exported ??= {};
@@ -532,7 +532,7 @@ Blackprint.Code.registerHandler({
 		}
 		else if(iface.type !== 'event'){
 			if(sharedData.nodeCodeNotWrapped?.has(functionName+ifaceIndex)){
-				let code = sharedData.nodeCodeNotWrapped.get(functionName+ifaceIndex).replace(/\bInput\b/gm, `bp_input_${ifaceIndex}`).replace(/\bOutput\b/gm, `bp_output_${ifaceIndex}`);
+				let code = sharedData.nodeCodeNotWrapped.get(functionName+ifaceIndex).replace(/\bInput\b/gm, `bp_input_${ifaceIndex}`).replace(/\bOutput\b/gm, `bp_output_${ifaceIndex}`).replace(/\n/g, '\n\t');
 
 				// Append only if not empty
 				if(code.trim()) result.codes.push(code);
@@ -617,7 +617,7 @@ ${imports.join('\n')}
 
 		if(sharedData.nodeCodeInit != null){
 			for (let [key, val] of sharedData.nodeCodeInit)
-				body += '\n\t' + val;
+				body += '\n\t' + val.replace(/\n/g, '\n\t');
 		}
 
 		if(sharedData.exportName === false){
