@@ -554,7 +554,7 @@ Blackprint.Code.registerHandler({
 			inits += '\n// Node .update() functions\n' + (Object.values(sharedData.nodeCode).join('\n').trim() || '// - This export has no shared function');
 
 			inits += `\n// Application module\nlet ${exportName} = await (async function(){`;
-			inits += `\n\tlet exports = new globalThis.BlackprintCodeHelper.Instance({Environment: {}});\n\texports.Variables = bp_var0;\n\texports.Functions = bp_func;`;
+			inits += `\n\tlet exports = new BP_Instance_({Environment: {}});\n\texports.Variables = bp_var0;\n\texports.Functions = bp_func;`;
 		}
 
 		inits += `\n\n\t// ==== Data storages ==== `;
@@ -609,6 +609,7 @@ This code is automatically generated with Blackprint
 Available Events: \n${exports}
 
 */
+${JavaScript_Append}
 
 ${imports.join('\n')}
 ;let bp_var0 = {}; let bp_svar2 = {}; let bp_func = {};

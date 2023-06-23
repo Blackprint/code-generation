@@ -444,7 +444,7 @@ Blackprint.Code.registerHandler({
 			let input = '';
 			if(inputAlias) input = `bp_input_${ifaceIndex} = ${inputAlias}`;
 			else if(inputs.length !== 0)
-				input = `bp_input_${ifaceIndex} = bp_DataStorage_({${inputs.join(', ')}})`;
+				input = `bp_input_${ifaceIndex} = BP_DataStorage_({${inputs.join(', ')}})`;
 			else input = `bp_input_${ifaceIndex} = None`;
 
 			if(input) input += '\n';
@@ -452,7 +452,7 @@ Blackprint.Code.registerHandler({
 			let output = '';
 			if(outputAlias) input = `bp_output_${ifaceIndex} = ${outputAlias}`;
 			else if(outputs.length !== 0){
-				output = `bp_output_${ifaceIndex} = bp_DataStorage_({${outputs.join(', ')}})`;
+				output = `bp_output_${ifaceIndex} = BP_DataStorage_({${outputs.join(', ')}})`;
 
 				let props = Object.keys(IOutput).map(v => JSON.stringify(v) + ':None');
 				output += `\nbp_data_${ifaceIndex} = {${props.join(', ')}}`
@@ -597,7 +597,7 @@ Blackprint.Code.registerHandler({
 		let inits = ``;
 		if(sharedData.exportName !== false){
 			// inits += ``;
-			inits += `\n\n# Application module\n${exportName} = bp_Instance_({"Environment":{}})\n${exportName}.Variables = bp_var0\n${exportName}.Functions = bp_func`;
+			inits += `\n\n# Application module\n${exportName} = BP_Instance_({"Environment":{}})\n${exportName}.Variables = bp_var0\n${exportName}.Functions = bp_func`;
 
 			inits += '\n\n# Node .update() functions\n' + ((Object.values(sharedData.nodeCode).join('\n').trim() || '# - This export has no shared function'));
 		}
@@ -648,7 +648,7 @@ Blackprint.Code.registerHandler({
 			exports += `# - ${exportName}.on("${key}", ${params})\n# \t=> ${temp.comment}`;
 		}
 
-		let imports = ['from BlackprintCodeHelper import bp_DataStorage_, bp_Instance_'];
+		let imports = [];
 		if(sharedData.moduleImports != null){
 			let temp = sharedData.moduleImports;
 			for (let key in temp) imports.push(`import ${key} as ${temp[key]}`);
@@ -666,6 +666,7 @@ Blackprint.Code.registerHandler({
 # 
 # Available Events: \n${exports}
 # 
+${Python_Append}
 
 ${imports.join('\n')}
 bp_var0 = {}; bp_svar2 = {}; bp_func = {};

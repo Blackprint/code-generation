@@ -1,4 +1,5 @@
-class CustomEvent {
+let JavaScript_Append = /* js */`
+;;class BP_CustomEvent_ {
 	on(eventName, func, options){
 		if(this._event === void 0){
 			Object.defineProperty(this, '_event', {
@@ -97,8 +98,7 @@ class CustomEvent {
 		}
 		else{
 			var i = this._event[eventName].indexOf(func);
-			if(i === -1)
-				return this;
+			if(i === -1) return this;
 
 			this._event[eventName].splice(i, 1);
 		}
@@ -106,7 +106,7 @@ class CustomEvent {
 		if(this._event[eventName].length === 0){
 			delete this._event[eventName];
 
-			// Small performance improvement by removing `_event`
+			// Small performance improvement by removing \`_event\`
 			if(--this._eventLen <= 0) delete this._event;
 		}
 		return this;
@@ -148,11 +148,10 @@ class CustomEvent {
 	}
 }
 
-window.BlackprintCodeHelper = {
-	Instance: class extends CustomEvent {
-		constructor(config){
-			super();
-			this.Environment = config.Environment || {};
-		}
-	},
+;;class BP_Instance_ extends BP_CustomEvent_ {
+	constructor(config){
+		super();
+		this.Environment = config.Environment || {};
+	}
 }
+`.replace(/;;/g, '');
